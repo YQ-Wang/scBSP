@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-with open("bsp2/README.md", "r") as f:
+with open("README.md", "r") as f:
     long_description = f.read()
 
 setup(
@@ -9,8 +9,7 @@ setup(
     description="A package that efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(where='bsp2/src'),
-    include_package_data=True,
+    packages=find_packages(exclude="test"),
     url="https://github.com/YQ-Wang/bsp2",
     author="Jinpu Li, Yiqing Wang",
     author_email="lijinp@health.missouri.edu, yiqing@wangemail.com",
