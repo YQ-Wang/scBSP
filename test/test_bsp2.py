@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix, identity, isspmatrix_csr
 from scipy.stats import lognorm
-from src import (
+from bsp2 import (
     binary_distance_matrix_threshold,
     granp,
     scale_sparse_minmax,
