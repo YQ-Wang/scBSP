@@ -9,8 +9,7 @@ from typing import Dict, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from scipy.sparse import (csr_matrix, diags, identity,  # type: ignore
-                          isspmatrix_csr)
+from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ignore
 from scipy.spatial import KDTree  # type: ignore
 from scipy.stats import gmean, lognorm  # type: ignore
 from sklearn.preprocessing import minmax_scale  # type: ignore
@@ -55,7 +54,7 @@ def _binary_distance_matrix_threshold(
     kd_tree = KDTree(input_sparse_mat_array)
     sparse_mat = kd_tree.sparse_distance_matrix(kd_tree, d_val)
 
-    if not isinstance(sparse_mat, csr_matrix):
+    if not isspmatrix_csr(sparse_mat):
         sparse_mat = csr_matrix(sparse_mat)
 
     sparse_mat[sparse_mat > 1] = 1
