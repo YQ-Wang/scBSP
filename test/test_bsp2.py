@@ -2,14 +2,14 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from scipy.sparse import csr_matrix, identity, isspmatrix_csr
-from scipy.stats import lognorm
-from bsp2 import (
-    binary_distance_matrix_threshold,
+from scipy.sparse import csr_matrix
+
+from bsp2.bsp2 import (
+    _binary_distance_matrix_threshold,
+    _scale_sparse_minmax,
+    _spvars,
+    _test_scores,
     granp,
-    scale_sparse_minmax,
-    spvars,
-    test_scores,
 )
 
 
@@ -21,7 +21,7 @@ class TestScaleSparseMinmax(unittest.TestCase):
         cols = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
         matrix = csr_matrix((data, (rows, cols)), shape=(5, 2))
 
-        scaled_matrix = scale_sparse_minmax(matrix)
+        scaled_matrix = _scale_sparse_minmax(matrix)
         scaled_matrix_dense = np.asarray(scaled_matrix.todense())
 
         self.assertEqual(scaled_matrix.shape, matrix.shape)
@@ -35,7 +35,7 @@ class TestScaleSparseMinmax(unittest.TestCase):
         cols = np.array([0, 0, 0])
         matrix = csr_matrix((data, (rows, cols)), shape=(5, 5))
 
-        scaled_matrix = scale_sparse_minmax(matrix)
+        scaled_matrix = _scale_sparse_minmax(matrix)
         scaled_matrix_dense = np.asarray(scaled_matrix.todense())
 
         self.assertEqual(scaled_matrix.shape, matrix.shape)
@@ -45,7 +45,7 @@ class TestScaleSparseMinmax(unittest.TestCase):
         # Empty matrix
         matrix = csr_matrix((0, 0))
 
-        scaled_matrix = scale_sparse_minmax(matrix)
+        scaled_matrix = _scale_sparse_minmax(matrix)
         scaled_matrix_dense = np.asarray(scaled_matrix.todense())
 
         self.assertEqual(scaled_matrix.shape, matrix.shape)
@@ -57,7 +57,7 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
         input_array = np.array([[0, 1], [1, 0], [1, 1]])
         d_val = 1.5
 
-        result = binary_distance_matrix_threshold(input_array, d_val)
+        result = _binary_distance_matrix_threshold(input_array, d_val)
 
         self.assertIsInstance(result, csr_matrix)
         self.assertEqual(result.shape, (input_array.shape[0], input_array.shape[0]))
@@ -66,7 +66,7 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
         input_array = np.array([[0, 0], [3, 3], [6, 6]])
         d_val = 5
 
-        result = binary_distance_matrix_threshold(input_array, d_val)
+        result = _binary_distance_matrix_threshold(input_array, d_val)
 
         self.assertIsInstance(result, csr_matrix)
         self.assertTrue((result[result > d_val].count_nonzero()) == 0)
@@ -80,7 +80,7 @@ class TestSpvars(unittest.TestCase):
         cols = np.array([0, 1, 0, 1])
         matrix = csr_matrix((data, (rows, cols)), shape=(2, 2))
 
-        result = spvars(matrix, axis=1)
+        result = _spvars(matrix, axis=1)
 
         # Check if the result is a numpy.ndarray
         self.assertIsInstance(result, np.ndarray)
@@ -94,7 +94,7 @@ class TestSpvars(unittest.TestCase):
         cols = np.array([0, 1, 0, 1])
         matrix = csr_matrix((data, (rows, cols)), shape=(2, 2))
 
-        result = spvars(matrix, axis=1)
+        result = _spvars(matrix, axis=1)
 
         expected = np.array([[0.25], [1.0]])
 
@@ -115,7 +115,7 @@ class TestTestScores(unittest.TestCase):
         d1 = 1.0
         d2 = 3.0
 
-        result = test_scores(input_sp_mat, input_exp_mat_raw, d1, d2)
+        result = _test_scores(input_sp_mat, input_exp_mat_raw, d1, d2)
 
         # Check if the result is a numpy.ndarray
         self.assertIsInstance(result, np.ndarray)
