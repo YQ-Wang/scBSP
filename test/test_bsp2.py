@@ -118,9 +118,9 @@ class TestTestScores(unittest.TestCase):
         result = _test_scores(input_sp_mat, input_exp_mat_raw, d1, d2)
 
         # Check if the result is a numpy.ndarray
-        self.assertIsInstance(result, np.ndarray)
+        self.assertIsInstance(result, list)
         # Check the shape of the result
-        self.assertEqual(result.shape, (2,))  # Shape depends on your function's logic
+        self.assertEqual(len(result), 2)  # Shape depends on your function's logic
 
 
 class TestGranp(unittest.TestCase):

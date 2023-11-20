@@ -5,11 +5,12 @@ Created on Mon Nov  6 20:19:23 2023
 """
 
 
-from typing import Dict, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
-import pandas as pd
-from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ignore
+import pandas as pd  # type: ignore
+from scipy.sparse import (csr_matrix, diags, identity,  # type: ignore
+                          isspmatrix_csr)
 from scipy.spatial import KDTree  # type: ignore
 from scipy.stats import gmean, lognorm  # type: ignore
 from sklearn.preprocessing import minmax_scale  # type: ignore
@@ -63,7 +64,7 @@ def _binary_distance_matrix_threshold(
     )
 
 
-def _spvars(input_csr_mat: csr_matrix, axis: int) -> np.ndarray:
+def _spvars(input_csr_mat: csr_matrix, axis: int) -> List[float]:
     input_csr_mat_squared = input_csr_mat.copy()
     input_csr_mat_squared.data **= 2
     return input_csr_mat_squared.mean(axis) - np.square(input_csr_mat.mean(axis))
@@ -71,7 +72,7 @@ def _spvars(input_csr_mat: csr_matrix, axis: int) -> np.ndarray:
 
 def _test_scores(
     input_sp_mat: np.ndarray, input_exp_mat_raw: csr_matrix, d1: float, d2: float
-) -> np.ndarray:
+) -> List[float]:
     input_exp_mat_norm = _scale_sparse_minmax(input_exp_mat_raw).transpose()
     input_exp_mat_raw = input_exp_mat_raw.transpose()
     inverted_diag_matrix_cache: Dict[Tuple, csr_matrix] = {}
@@ -86,7 +87,7 @@ def _test_scores(
             )
         return inverted_diag_matrix_cache[cache_key]
 
-    def _var_local_means(d_val: float) -> np.ndarray:
+    def _var_local_means(d_val: float) -> list:
         patches_cells = _binary_distance_matrix_threshold(input_sp_mat, d_val)
         patches_cells_centroid = diags(
             (patches_cells.sum(axis=1) > 1).astype(float).A.ravel(),
@@ -103,7 +104,7 @@ def _test_scores(
     var_x_0_add = _spvars(input_exp_mat_raw, axis=1).A.ravel()  # type: ignore
     var_x_0_add /= max(var_x_0_add)
     t_matrix = (var_x[:, 1] / var_x[:, 0]) * var_x_0_add
-    return t_matrix
+    return t_matrix.tolist()
 
 
 def granp(
@@ -111,7 +112,7 @@ def granp(
     input_exp_mat_raw: Union[np.ndarray, pd.DataFrame, csr_matrix],
     d1: float = 1.0,
     d2: float = 3.0,
-) -> np.ndarray:
+) -> List[float]:
     # Normalize patch size
     # Using gmean for geometric mean to scale d1 and d2 accordingly
     scale_factor = (
@@ -134,7 +135,7 @@ def granp(
 
     # Calculate p-values
     t_matrix_sum_upper90 = np.quantile(t_matrix_sum, 0.90)
-    t_matrix_sum_mid = t_matrix_sum[t_matrix_sum < t_matrix_sum_upper90]
+    t_matrix_sum_mid = [val for val in t_matrix_sum if val < t_matrix_sum_upper90]
     log_t_matrix_sum_mid = np.log(t_matrix_sum_mid)
     log_norm_params = (log_t_matrix_sum_mid.mean(), log_t_matrix_sum_mid.std(ddof=1))
 
