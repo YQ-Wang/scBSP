@@ -3,10 +3,11 @@ import unittest
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
+from scipy.sparse import random as sparse_random
 
 from bsp2.bsp2 import (
     _binary_distance_matrix_threshold,
-    _scale_sparse_minmax,
+    _scale_sparse_matrix,
     _spvars,
     _test_scores,
     granp,
@@ -14,38 +15,50 @@ from bsp2.bsp2 import (
 
 
 class TestScaleSparseMinmax(unittest.TestCase):
-    def test_dense_conversion_scaling(self):
-        # Sparse matrix with more than 10% non-zero entries
-        data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-        rows = np.array([0, 1, 2, 3, 4, 0, 1, 2, 3, 4])
-        cols = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
-        matrix = csr_matrix((data, (rows, cols)), shape=(5, 2))
+    def test_scale_sparse_matrix(self):
+        # Creating a small sparse matrix with known values
+        rows, cols = 3, 3
+        data = [4, 2, 1, 4, 5]
+        row_indices = [0, 0, 1, 1, 2]
+        col_indices = [0, 2, 1, 2, 2]
+        test_matrix = csr_matrix((data, (row_indices, col_indices)), shape=(rows, cols))
 
-        scaled_matrix = _scale_sparse_minmax(matrix)
-        scaled_matrix_dense = np.asarray(scaled_matrix.todense())
+        # Expected scaled matrix
+        # For row 0: max is 4, so 4/4=1 and 2/4=0.5
+        # For row 1: max is 4, so 1/4=0.25 and 4/4=1
+        # For row 2: only one value which is 5, so it remains 1
+        expected_scaled_data = [1, 0.5, 0.25, 1, 1]
 
-        self.assertEqual(scaled_matrix.shape, matrix.shape)
-        # Ensure scaled_matrix_dense is ndarray and not np.matrix
-        self.assertIsInstance(scaled_matrix_dense, np.ndarray)
+        scaled_matrix = _scale_sparse_matrix(test_matrix)
 
-    def test_sparse_scaling(self):
-        # Sparse matrix with less than 10% non-zero entries
-        data = np.array([1, 2, 3])
-        rows = np.array([0, 1, 2])
-        cols = np.array([0, 0, 0])
-        matrix = csr_matrix((data, (rows, cols)), shape=(5, 5))
+        scaled_data = scaled_matrix.data
+        self.assertTrue(
+            np.allclose(scaled_data, expected_scaled_data),
+            "Scaled data does not match expected values",
+        )
 
-        scaled_matrix = _scale_sparse_minmax(matrix)
-        scaled_matrix_dense = np.asarray(scaled_matrix.todense())
+    def test_sparse_matrix_scaling(self):
+        # Create a sparse matrix with less than 10% non-zero entries
+        rows, cols = 10, 10
+        density = 0.1
+        sparse_matrix = sparse_random(
+            rows, cols, density=density, format="csr", dtype=float
+        )
 
-        self.assertEqual(scaled_matrix.shape, matrix.shape)
-        self.assertIsInstance(scaled_matrix_dense, np.ndarray)
+        scaled_matrix = _scale_sparse_matrix(sparse_matrix)
+
+        for row in range(scaled_matrix.shape[0]):
+            row_data = scaled_matrix[row, :].toarray().flatten()
+            if np.any(row_data != 0):
+                self.assertEqual(
+                    row_data.max(), 1, "Max value in a row should be 1 after scaling"
+                )
 
     def test_empty_matrix(self):
         # Empty matrix
         matrix = csr_matrix((0, 0))
 
-        scaled_matrix = _scale_sparse_minmax(matrix)
+        scaled_matrix = _scale_sparse_matrix(matrix)
         scaled_matrix_dense = np.asarray(scaled_matrix.todense())
 
         self.assertEqual(scaled_matrix.shape, matrix.shape)

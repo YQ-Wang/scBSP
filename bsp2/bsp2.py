@@ -13,40 +13,30 @@ from scipy.sparse import (csr_matrix, diags, identity,  # type: ignore
                           isspmatrix_csr)
 from scipy.spatial import KDTree  # type: ignore
 from scipy.stats import gmean, lognorm  # type: ignore
-from sklearn.preprocessing import minmax_scale  # type: ignore
 
 
-def _scale_sparse_minmax(input_exp_mat: csr_matrix) -> csr_matrix:
+def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     if input_exp_mat.shape[0] == 0 or input_exp_mat.shape[1] == 0:
         return input_exp_mat
 
-    input_exp_mat_cdx = input_exp_mat.data
+    data = input_exp_mat.data
+    rows, cols = input_exp_mat.nonzero()
 
-    if len(input_exp_mat_cdx) / input_exp_mat.shape[0] / input_exp_mat.shape[1] > 0.1:
-        input_exp_mat_den = input_exp_mat.todense()
-        input_exp_mat_den_array = np.asarray(input_exp_mat_den)
-        norm_exp = minmax_scale(input_exp_mat_den_array, axis=1)
-        created_sparse_mat = csr_matrix(norm_exp)
-    else:
-        input_exp_mat_row = input_exp_mat.getnnz(axis=0)
-        input_exp_mat_idx = np.r_[0, input_exp_mat_row[:-1].cumsum()]
-        input_exp_mat_max = np.maximum.reduceat(input_exp_mat_cdx, input_exp_mat_idx)
-        input_exp_mat_min = (
-            np.minimum.reduceat(input_exp_mat_cdx, input_exp_mat_idx) - 1
-        )
-        input_exp_mat_diff = input_exp_mat_max - input_exp_mat_min
-        input_exp_mat_diff[input_exp_mat_diff == 0] = 1  # Prevent division by zero
-        input_exp_mat_diffs = 1 / input_exp_mat_diff
-        input_exp_mat_diffs = np.repeat(input_exp_mat_diffs, input_exp_mat_row)
-        input_exp_mat_mins = np.repeat(input_exp_mat_min, input_exp_mat_row)
-        input_exp_mat_vals = (
-            input_exp_mat_cdx - input_exp_mat_mins
-        ) * input_exp_mat_diffs
-        rows, cols = input_exp_mat.nonzero()
-        created_sparse_mat = csr_matrix(
-            (input_exp_mat_vals, (rows, cols)), shape=input_exp_mat.shape
-        )
-    return created_sparse_mat
+    row_indices = np.diff(input_exp_mat.indptr)
+    row_idx = np.r_[0, np.cumsum(row_indices)]
+
+    row_max = np.array(
+        [
+            data[start:end].max() if end > start else 1
+            for start, end in zip(row_idx[:-1], row_idx[1:])
+        ]
+    )
+
+    # Scale the data based on the row max
+    data_scaled = data / np.repeat(row_max, row_indices)
+    scaled_matrix = csr_matrix((data_scaled, (rows, cols)), shape=input_exp_mat.shape)
+
+    return scaled_matrix
 
 
 def _binary_distance_matrix_threshold(
@@ -73,7 +63,7 @@ def _spvars(input_csr_mat: csr_matrix, axis: int) -> List[float]:
 def _test_scores(
     input_sp_mat: np.ndarray, input_exp_mat_raw: csr_matrix, d1: float, d2: float
 ) -> List[float]:
-    input_exp_mat_norm = _scale_sparse_minmax(input_exp_mat_raw).transpose()
+    input_exp_mat_norm = _scale_sparse_matrix(input_exp_mat_raw).transpose()
     input_exp_mat_raw = input_exp_mat_raw.transpose()
     inverted_diag_matrix_cache: Dict[Tuple, csr_matrix] = {}
 
