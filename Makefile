@@ -18,7 +18,7 @@ test: clean
 
 # Target for running MyPy
 mypy: clean
-	@$(MYPY) bsp2/
+	@$(MYPY) scbsp/
 	@make clean_mypy_cache
 
 

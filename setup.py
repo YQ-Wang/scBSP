@@ -4,13 +4,13 @@ with open("README.md", "r") as f:
     long_description = f.read()
 
 setup(
-    name="bsp2",
+    name="scbsp",
     version="0.0.1",
     description="A package that efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=["bsp2"],
-    url="https://github.com/YQ-Wang/bsp2",
+    packages=["scbsp"],
+    url="https://github.com/YQ-Wang/scBSP",
     author="Jinpu Li, Yiqing Wang",
     author_email="lijinp@health.missouri.edu, yiqing@wangemail.com",
     license="GPLv3",

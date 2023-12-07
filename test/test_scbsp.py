@@ -5,7 +5,7 @@ import pandas as pd
 from scipy.sparse import csr_matrix
 from scipy.sparse import random as sparse_random
 
-from bsp2.bsp2 import (
+from scbsp.scbsp import (
     _binary_distance_matrix_threshold,
     _scale_sparse_matrix,
     _spvars,

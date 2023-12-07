@@ -1,12 +1,12 @@
-# bsp2
-bsp2 is a specialized package designed for processing biological data, specifically in the analysis of gene expression and cell coordinates. It efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data.
+# scBSP
+scBSP is a specialized package designed for processing biological data, specifically in the analysis of gene expression and cell coordinates. It efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data.
 
 ## Installation
-`pip install "git+https://github.com/YQ-Wang/bsp2.git"`
+`pip install "git+https://github.com/YQ-Wang/scBSP.git"`
 
 ## Usage
 
-To use bsp2, you need to provide two primary inputs:
+To use scBSP, you need to provide two primary inputs:
 
 1. **Cell Coordinates Matrix (`input_sp_mat`)**: 
    - Format: Numpy array.
@@ -24,7 +24,7 @@ Additionally, you must specify the following parameters:
 ### Example
 
 ```python
-import bsp2
+import scbsp
 
 # Example data loading
 input_sp_mat = ...
@@ -35,9 +35,9 @@ d1 = ...
 d2 = ...
 
 # Calculate p-values
-p_values = bsp2.granp(input_sp_mat, input_exp_mat_raw, d1, d2)
+p_values = scbsp.granp(input_sp_mat, input_exp_mat_raw, d1, d2)
 ```
 
 ## Output
 
-The output of bsp2 is a list of p-values corresponding to the given genes.
+The output of scBSP is a list of p-values corresponding to the given genes.
