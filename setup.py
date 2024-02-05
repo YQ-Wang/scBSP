@@ -5,7 +5,7 @@ with open("README.md", "r") as f:
 
 setup(
     name="scbsp",
-    version="0.0.1",
+    version="0.0.2",
     description="A package that efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data",
     long_description=long_description,
     long_description_content_type="text/markdown",

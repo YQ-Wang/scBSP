@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd  # type: ignore
 from scipy.sparse import (csr_matrix, diags, identity,  # type: ignore
                           isspmatrix_csr)
-from scipy.spatial import KDTree  # type: ignore
-from scipy.stats import gmean, lognorm  # type: ignore
+from scipy.stats import gmean, lognorm
+from sklearn.neighbors import BallTree  # type: ignore
 
 
 def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
@@ -39,19 +39,24 @@ def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     return scaled_matrix
 
 
-def _binary_distance_matrix_threshold(
-    input_sparse_mat_array: np.ndarray, d_val: float
-) -> csr_matrix:
-    kd_tree = KDTree(input_sparse_mat_array)
-    sparse_mat = kd_tree.sparse_distance_matrix(kd_tree, d_val)
-
-    if not isspmatrix_csr(sparse_mat):
-        sparse_mat = csr_matrix(sparse_mat)
-
-    sparse_mat[sparse_mat > 1] = 1
-    return sparse_mat + identity(
-        input_sparse_mat_array.shape[0], format="csr", dtype=sparse_mat.dtype
-    )
+def _binary_distance_matrix_threshold(input_sparse_mat_array: np.ndarray, d_val: float) -> csr_matrix:
+    # Initialize BallTree
+    ball_tree = BallTree(input_sparse_mat_array)
+    
+    # Query indices and distances of points within `d_val` radius for each point
+    indices = ball_tree.query_radius(input_sparse_mat_array, r=d_val, return_distance=False)
+    
+    # Prepare data for constructing a sparse matrix: indices for rows and their corresponding neighbors
+    rows = np.repeat(np.arange(input_sparse_mat_array.shape[0]), [len(i) for i in indices])
+    cols = np.concatenate(indices)
+    data = np.ones_like(rows)
+    
+    # Construct binary csr_matrix
+    sparse_mat = csr_matrix((data, (rows, cols)), shape=(input_sparse_mat_array.shape[0], input_sparse_mat_array.shape[0]))
+    
+    sparse_mat = sparse_mat + identity(input_sparse_mat_array.shape[0], format="csr", dtype=bool)
+    
+    return sparse_mat
 
 
 def _spvars(input_csr_mat: csr_matrix, axis: int) -> List[float]:
