@@ -39,10 +39,7 @@ def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     return scaled_matrix
 
 
-def _binary_distance_matrix_threshold(input_sparse_mat_array: np.ndarray, d_val: float) -> csr_matrix:
-    # Initialize BallTree
-    ball_tree = BallTree(input_sparse_mat_array)
-    
+def _binary_distance_matrix_threshold(ball_tree: BallTree, input_sparse_mat_array: np.ndarray, d_val: float) -> csr_matrix:
     # Query indices and distances of points within `d_val` radius for each point
     indices = ball_tree.query_radius(input_sparse_mat_array, r=d_val, return_distance=False)
     
@@ -82,8 +79,8 @@ def _test_scores(
             )
         return inverted_diag_matrix_cache[cache_key]
 
-    def _var_local_means(d_val: float) -> list:
-        patches_cells = _binary_distance_matrix_threshold(input_sp_mat, d_val)
+    def _var_local_means(ball_tree: BallTree, d_val: float) -> list:
+        patches_cells = _binary_distance_matrix_threshold(ball_tree, input_sp_mat, d_val)
         patches_cells_centroid = diags(
             (patches_cells.sum(axis=1) > 1).astype(float).A.ravel(),
             offsets=0,
@@ -94,8 +91,9 @@ def _test_scores(
         diag_matrix_sparse = _get_inverted_diag_matrix(sum_axis_0)
         x_kj = input_exp_mat_norm.dot(patches_cells).dot(diag_matrix_sparse)
         return _spvars(x_kj, axis=1)
-
-    var_x = np.column_stack([_var_local_means(d_val).A.ravel() for d_val in (d1, d2)])  # type: ignore
+    
+    ball_tree = BallTree(input_sp_mat)
+    var_x = np.column_stack([_var_local_means(ball_tree, d_val).A.ravel() for d_val in (d1, d2)])  # type: ignore
     var_x_0_add = _spvars(input_exp_mat_raw, axis=1).A.ravel()  # type: ignore
     var_x_0_add /= max(var_x_0_add)
     t_matrix = (var_x[:, 1] / var_x[:, 0]) * var_x_0_add

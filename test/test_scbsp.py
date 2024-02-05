@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 from scipy.sparse import random as sparse_random
+from sklearn.neighbors import BallTree
 
 from scbsp.scbsp import (
     _binary_distance_matrix_threshold,
@@ -69,8 +70,9 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
     def test_non_empty_array(self):
         input_array = np.array([[0, 1], [1, 0], [1, 1]])
         d_val = 1.5
+        ball_tree = BallTree(input_array)
 
-        result = _binary_distance_matrix_threshold(input_array, d_val)
+        result = _binary_distance_matrix_threshold(ball_tree, input_array, d_val)
 
         self.assertIsInstance(result, csr_matrix)
         self.assertEqual(result.shape, (input_array.shape[0], input_array.shape[0]))
@@ -78,8 +80,9 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
     def test_distance_threshold(self):
         input_array = np.array([[0, 0], [3, 3], [6, 6]])
         d_val = 5
+        ball_tree = BallTree(input_array)
 
-        result = _binary_distance_matrix_threshold(input_array, d_val)
+        result = _binary_distance_matrix_threshold(ball_tree, input_array, d_val)
 
         self.assertIsInstance(result, csr_matrix)
         self.assertTrue((result[result > d_val].count_nonzero()) == 0)
