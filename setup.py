@@ -1,15 +1,19 @@
-from setuptools import setup
+from setuptools import setup, find_packages
+import codecs
+import os
 
-with open("README.md", "r") as f:
-    long_description = f.read()
+here = os.path.abspath(os.path.dirname(__file__))
+
+with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
+    long_description = "\\n" + fh.read()
 
 setup(
     name="scbsp",
-    version="0.0.2",
+    version='{{VERSION_PLACEHOLDER}}',
     description="A package that efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=["scbsp"],
+    packages=find_packages(),
     url="https://github.com/YQ-Wang/scBSP",
     author="Jinpu Li, Yiqing Wang",
     author_email="lijinp@health.missouri.edu, yiqing@wangemail.com",
