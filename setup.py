@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 import codecs
 import os
 
@@ -13,7 +13,7 @@ setup(
     description="A package that efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(),
+    packages=["scbsp"],
     url="https://github.com/YQ-Wang/scBSP",
     author="Jinpu Li, Yiqing Wang",
     author_email="lijinp@health.missouri.edu, yiqing@wangemail.com",
