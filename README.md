@@ -6,7 +6,7 @@ scBSP is a specialized package designed for processing biological data, specific
 
 To install scBSP, run the following command:
 
-`pip install "git+https://github.com/YQ-Wang/scBSP.git"`
+`pip install scbsp`
 
 ## Usage
 
