@@ -4,10 +4,10 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 from scipy.sparse import random as sparse_random
-from sklearn.neighbors import BallTree
 
 from scbsp.scbsp import (
     _binary_distance_matrix_threshold,
+    _query_hnsw_index,
     _scale_sparse_matrix,
     _spvars,
     _test_scores,
@@ -70,9 +70,11 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
     def test_non_empty_array(self):
         input_array = np.array([[0, 1], [1, 0], [1, 1]])
         d_val = 1.5
-        ball_tree = BallTree(input_array)
+        labels, distances = _query_hnsw_index(input_array)
 
-        result = _binary_distance_matrix_threshold(ball_tree, input_array, d_val)
+        result = _binary_distance_matrix_threshold(
+            labels, distances, input_array, d_val
+        )
 
         self.assertIsInstance(result, csr_matrix)
         self.assertEqual(result.shape, (input_array.shape[0], input_array.shape[0]))
@@ -80,9 +82,11 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
     def test_distance_threshold(self):
         input_array = np.array([[0, 0], [3, 3], [6, 6]])
         d_val = 5
-        ball_tree = BallTree(input_array)
+        labels, distances = _query_hnsw_index(input_array)
 
-        result = _binary_distance_matrix_threshold(ball_tree, input_array, d_val)
+        result = _binary_distance_matrix_threshold(
+            labels, distances, input_array, d_val
+        )
 
         self.assertIsInstance(result, csr_matrix)
         self.assertTrue((result[result > d_val].count_nonzero()) == 0)
@@ -150,7 +154,7 @@ class TestGranp(unittest.TestCase):
 
         self.assertEqual(sum([(i < 0.0001).astype(int) for i in p_values[0:999]]), 996)
         self.assertEqual(
-            sum([(i < 0.0001).astype(int) for i in p_values[1000:9999]]), 1
+            sum([(i < 0.0001).astype(int) for i in p_values[1000:9999]]), 0
         )
 
 

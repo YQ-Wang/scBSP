@@ -25,10 +25,6 @@ Additionally, you must specify the following parameters:
 - `d1`: A floating-point number.
 - `d2`: A floating-point number.
 
-Optionally, you can specify the following parameters:
-
-- `leaf_size`: An integer that determines the number of points at which the algorithm switches to brute-force search. Adjusting `leaf_size`` affects the query's speed and the memory required for the tree structure.
-- `use_cache`: A boolean (True by default) that controls whether to use caching. Disabling cache (False) reduces memory usage slightly.
 
 ### Example
 
@@ -44,11 +40,9 @@ input_exp_mat_raw = ...  # Gene Expression Matrix
 # Set the optional parameters
 d1 = 0.5  # Example value
 d2 = 0.5  # Example value
-leaf_size = 80  # Example value
-use_cache = True  # Default is True
 
 # Execute the calculation
-p_values = scbsp.granp(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size, use_cache)
+p_values = scbsp.granp(input_sp_mat, input_exp_mat_raw, d1, d2)
 ```
 
 ## Output

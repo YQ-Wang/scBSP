@@ -23,7 +23,7 @@ setup(
         'Programming Language :: Python :: 3',
         "Operating System :: OS Independent",
     ],
-    install_requires=["numpy >= 1.26.2", "pandas >= 2.1.3", "scipy >= 1.11.3", "scikit-learn >= 1.3.2"],
+    install_requires=["numpy >= 1.26.2", "pandas >= 2.1.3", "scipy >= 1.11.3", "scikit-learn >= 1.3.2", "hnswlib >= 0.8.0"],
     extras_require={
         "dev": ["mypy>=1.7.0"],
     },

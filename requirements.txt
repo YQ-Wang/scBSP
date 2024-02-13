@@ -4,6 +4,8 @@
 #
 #    pip-compile --output-file=requirements.txt requirements.in
 #
+hnswlib==0.8.0
+    # via -r requirements.in
 joblib==1.3.2
     # via scikit-learn
 mypy==1.7.0
@@ -15,6 +17,7 @@ mypy-extensions==1.0.0
 numpy==1.26.2
     # via
     #   -r requirements.in
+    #   hnswlib
     #   pandas
     #   scikit-learn
     #   scipy
