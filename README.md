@@ -38,8 +38,8 @@ input_sp_mat = ...  # Cell Coordinates Matrix
 input_exp_mat_raw = ...  # Gene Expression Matrix
 
 # Set the optional parameters
-d1 = 0.5  # Example value
-d2 = 0.5  # Example value
+d1 = 1.0  # Example value
+d2 = 3.0  # Example value
 
 # Execute the calculation
 p_values = scbsp.granp(input_sp_mat, input_exp_mat_raw, d1, d2)
