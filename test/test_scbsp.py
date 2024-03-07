@@ -9,8 +9,8 @@ from scbsp.scbsp import (
     _binary_distance_matrix_threshold,
     _query_hnsw_index,
     _scale_sparse_matrix,
-    _spvars,
-    _test_scores,
+    _calculate_sparse_variances,
+    _get_test_scores,
     granp,
 )
 
@@ -100,7 +100,7 @@ class TestSpvars(unittest.TestCase):
         cols = np.array([0, 1, 0, 1])
         matrix = csr_matrix((data, (rows, cols)), shape=(2, 2))
 
-        result = _spvars(matrix, axis=1)
+        result = _calculate_sparse_variances(matrix, axis=1)
 
         # Check if the result is a numpy.ndarray
         self.assertIsInstance(result, np.ndarray)
@@ -114,7 +114,7 @@ class TestSpvars(unittest.TestCase):
         cols = np.array([0, 1, 0, 1])
         matrix = csr_matrix((data, (rows, cols)), shape=(2, 2))
 
-        result = _spvars(matrix, axis=1)
+        result = _calculate_sparse_variances(matrix, axis=1)
 
         expected = np.array([[0.25], [1.0]])
 
@@ -135,7 +135,7 @@ class TestTestScores(unittest.TestCase):
         d1 = 1.0
         d2 = 3.0
 
-        result = _test_scores(input_sp_mat, input_exp_mat_raw, d1, d2)
+        result = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2)
 
         # Check if the result is a numpy.ndarray
         self.assertIsInstance(result, list)
