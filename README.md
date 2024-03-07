@@ -6,12 +6,11 @@ scBSP is a specialized package designed for processing biological data, specific
 
 ### Dependencies
 scBSP requires:
-
-Python (>= 3.8)
-NumPy (>= 1.24.4)
-Pandas (>= 1.3.5)
-SciPy (>= 1.10.1)
-hnswlib (>= 0.8.0)
+- Python (>= 3.8)
+- NumPy (>= 1.24.4)
+- Pandas (>= 1.3.5)
+- SciPy (>= 1.10.1)
+- hnswlib (>= 0.8.0)
 
 To install scBSP, run the following command:
 
