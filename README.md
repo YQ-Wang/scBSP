@@ -18,11 +18,11 @@ For enhanced scBSP using HNSW for distance calculation:
 ### Installation Commands
 For Standard Installation (Using Ball Tree):
 
-`pip install scbsp`
+`pip install "scbsp"`
 
 For Installation with HNSW (Hierarchical Navigable Small World Graphs):
 
-`pip install scbsp[hnsw]`
+`pip install "scbsp[hnsw]"`
 
 ## Usage
 
