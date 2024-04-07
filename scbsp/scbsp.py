@@ -9,11 +9,19 @@ on large-scale data.
 
 from typing import List, Tuple, Union
 
-import hnswlib
 import numpy as np
 import pandas as pd  # type: ignore
 from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ignore
 from scipy.stats import gmean, lognorm
+
+try:
+    import hnswlib
+
+    use_hnsw = True
+except ImportError:
+    from sklearn.neighbors import BallTree
+
+    use_hnsw = False
 
 
 def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
@@ -51,29 +59,38 @@ def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
 
 
 def _binary_distance_matrix_threshold(
-    labels: np.ndarray,
-    distances: np.ndarray,
-    input_sparse_mat_array: np.ndarray,
-    d_val: float,
+    input_sparse_mat_array: np.ndarray, d_val: float, leaf_size: int
 ) -> csr_matrix:
     """
     Creates a binary distance matrix where distances below a threshold are marked as 1.
 
     Args:
-        labels: An array of labels for each point.
-        distances: An array of distances between points.
         input_sparse_mat_array: The input sparse matrix array.
         d_val: The distance threshold.
+        leaf_size: An integer that determines the maximum number of points after which the Ball Tree algorithm opts for a brute-force search approach.
 
     Returns:
         A csr_matrix representing the binary distance matrix.
     """
 
-    within_d_val = distances <= d_val
-    rows = np.repeat(np.arange(labels.shape[0]), labels.shape[1])[
-        within_d_val.flatten()
-    ]
-    cols = labels.flatten()[within_d_val.flatten()]
+    if use_hnsw is True:
+        labels, distances = _query_hnsw_index(input_sparse_mat_array)
+        within_d_val = distances <= d_val**2
+        rows = np.repeat(np.arange(labels.shape[0]), labels.shape[1])[
+            within_d_val.flatten()
+        ]
+        cols = labels.flatten()[within_d_val.flatten()]
+    else:
+        ball_tree = BallTree(input_sparse_mat_array, leaf_size=leaf_size)
+        indices = ball_tree.query_radius(
+            input_sparse_mat_array, r=d_val, return_distance=False
+        )
+        rows = np.repeat(
+            np.arange(input_sparse_mat_array.shape[0]), [len(i) for i in indices]
+        )
+        cols = np.concatenate(indices)
+
+    # Construct binary csr_matrix
     data = np.ones_like(rows)
 
     sparse_mat = csr_matrix(
@@ -126,7 +143,11 @@ def _query_hnsw_index(input_sp_mat: csr_matrix) -> Tuple[np.ndarray, np.ndarray]
 
 
 def _get_test_scores(
-    input_sp_mat: np.ndarray, input_exp_mat_raw: csr_matrix, d1: float, d2: float
+    input_sp_mat: np.ndarray,
+    input_exp_mat_raw: csr_matrix,
+    d1: float,
+    d2: float,
+    leaf_size: int,
 ) -> List[float]:
     """
     Calculates test scores for genomic data based on input sparse matrices and distance thresholds.
@@ -136,6 +157,7 @@ def _get_test_scores(
         input_exp_mat_raw: The raw expression matrix in csr_matrix format.
         d1: Distance threshold 1.
         d2: Distance threshold 2.
+        leaf_size: An integer that determines the maximum number of points after which the Ball Tree algorithm opts for a brute-force search approach.
 
     Returns:
         A list of test scores.
@@ -150,14 +172,13 @@ def _get_test_scores(
         return diags(diag_data, offsets=0, format="csr")
 
     def _var_local_means(
-        labels: np.ndarray,
-        distances: np.ndarray,
         input_sp_mat: csr_matrix,
         d_val: float,
         input_exp_mat_norm: csr_matrix,
+        leaf_size: int,
     ) -> List[float]:
         patches_cells = _binary_distance_matrix_threshold(
-            labels, distances, input_sp_mat, d_val**2
+            input_sp_mat, d_val, leaf_size
         )
         patches_cells_centroid = diags(
             (patches_cells.sum(axis=1) > 1).astype(float).A.ravel(),
@@ -170,8 +191,7 @@ def _get_test_scores(
         x_kj = input_exp_mat_norm.dot(patches_cells.dot(diag_matrix_sparse))
         return _calculate_sparse_variances(x_kj, axis=1)
 
-    labels, distances = _query_hnsw_index(input_sp_mat)
-    var_x = np.column_stack([_var_local_means(labels, distances, input_sp_mat, d_val, input_exp_mat_norm).A.ravel() for d_val in (d1, d2)])  # type: ignore
+    var_x = np.column_stack([_var_local_means(input_sp_mat, d_val, input_exp_mat_norm, leaf_size).A.ravel() for d_val in (d1, d2)])  # type: ignore
     var_x_0_add = _calculate_sparse_variances(input_exp_mat_raw, axis=1).A.ravel()  # type: ignore
     var_x_0_add /= max(var_x_0_add)
     t_matrix = (var_x[:, 1] / var_x[:, 0]) * var_x_0_add
@@ -183,6 +203,7 @@ def granp(
     input_exp_mat_raw: Union[np.ndarray, pd.DataFrame, csr_matrix],
     d1: float = 1.0,
     d2: float = 3.0,
+    leaf_size: int = 80,
 ) -> List[float]:
     """
     Calculates the p-values for genomic data.
@@ -192,6 +213,7 @@ def granp(
         input_exp_mat_raw: The raw expression matrix, which can be a numpy array, pandas DataFrame, or csr_matrix. The dimension is N x P, where N is the number of cells and P is the number of genes.
         d1: Distance threshold 1.
         d2: Distance threshold 2.
+        leaf_size: An integer that determines the maximum number of points after which the Ball Tree algorithm opts for a brute-force search approach.
 
     Returns:
         A list of p-values.
@@ -213,7 +235,7 @@ def granp(
     if not isspmatrix_csr(input_exp_mat_raw):
         input_exp_mat_raw = csr_matrix(input_exp_mat_raw)
 
-    t_matrix_sum = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2)
+    t_matrix_sum = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size)
 
     # Calculate p-values
     t_matrix_sum_upper90 = np.quantile(t_matrix_sum, 0.90)

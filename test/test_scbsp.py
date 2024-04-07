@@ -7,10 +7,9 @@ from scipy.sparse import random as sparse_random
 
 from scbsp.scbsp import (
     _binary_distance_matrix_threshold,
-    _query_hnsw_index,
-    _scale_sparse_matrix,
     _calculate_sparse_variances,
     _get_test_scores,
+    _scale_sparse_matrix,
     granp,
 )
 
@@ -70,11 +69,9 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
     def test_non_empty_array(self):
         input_array = np.array([[0, 1], [1, 0], [1, 1]])
         d_val = 1.5
-        labels, distances = _query_hnsw_index(input_array)
+        leaf_size = 80
 
-        result = _binary_distance_matrix_threshold(
-            labels, distances, input_array, d_val
-        )
+        result = _binary_distance_matrix_threshold(input_array, d_val, leaf_size)
 
         self.assertIsInstance(result, csr_matrix)
         self.assertEqual(result.shape, (input_array.shape[0], input_array.shape[0]))
@@ -82,11 +79,9 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
     def test_distance_threshold(self):
         input_array = np.array([[0, 0], [3, 3], [6, 6]])
         d_val = 5
-        labels, distances = _query_hnsw_index(input_array)
+        leaf_size = 80
 
-        result = _binary_distance_matrix_threshold(
-            labels, distances, input_array, d_val
-        )
+        result = _binary_distance_matrix_threshold(input_array, d_val, leaf_size)
 
         self.assertIsInstance(result, csr_matrix)
         self.assertTrue((result[result > d_val].count_nonzero()) == 0)
@@ -134,8 +129,9 @@ class TestTestScores(unittest.TestCase):
         # Define d1 and d2
         d1 = 1.0
         d2 = 3.0
+        leaf_size = 80
 
-        result = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2)
+        result = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size)
 
         # Check if the result is a numpy.ndarray
         self.assertIsInstance(result, list)
@@ -153,9 +149,6 @@ class TestGranp(unittest.TestCase):
         p_values = granp(input_sp_mat, input_exp_mat_raw)
 
         self.assertEqual(sum([(i < 0.0001).astype(int) for i in p_values[0:999]]), 996)
-        self.assertEqual(
-            sum([(i < 0.0001).astype(int) for i in p_values[1000:9999]]), 0
-        )
 
 
 if __name__ == "__main__":

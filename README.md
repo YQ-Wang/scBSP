@@ -1,20 +1,27 @@
 # scBSP
 
-scBSP is a specialized package designed for processing biological data, specifically in the analysis of gene expression and cell coordinates. It efficiently computes p-values for a given set of genes based on input matrices representing cell coordinates and gene expression data.
+scBSP is a dedicated software package crafted for the nuanced domain of biological data processing, emphasizing gene expression analysis and cell coordinate evaluation. It offers a streamlined method to calculate p-values for a set of genes by leveraging input matrices that encapsulate cell coordinates and gene expression data.
 
 ## Installation
 
 ### Dependencies
-scBSP requires:
+To ensure scBSP functions optimally, the following dependencies are required:
 - Python (>= 3.8)
 - NumPy (>= 1.24.4)
 - Pandas (>= 1.3.5)
 - SciPy (>= 1.10.1)
+- scikit-learn (>=1.3.2)
+
+For enhanced scBSP using HNSW for distance calculation:
 - hnswlib (>= 0.8.0)
 
 To install scBSP, run the following command:
 
+For Standard Installation (Using Ball Tree):
 `pip install scbsp`
+
+For Installation with HNSW (Hierarchical Navigable Small World Graphs):
+`pip install scbsp[hnsw]`
 
 ## Usage
 
@@ -28,15 +35,16 @@ To use scBSP, you need to provide two primary inputs:
    - Format: Numpy array, Pandas DataFrame, or CSR matrix.
    - Dimensions: N x P, where N is the number of cells and P is the number of genes.
 
-Additionally, you must specify the following parameters:
+Additional parameters to specify include:
 
-- `d1`: A floating-point number.
-- `d2`: A floating-point number.
+- `d1`: A floating-point number. Default value is 1.0.
+- `d2`: A floating-point number. Default value is 3.0.
+- `leaf_size`: Optional integer defining the maximum point threshold for the Ball Tree algorithm to revert to brute-force search (default = 80). Not required for installations using HNSW.
 
 
 ### Example
 
-Here's a simple example to demonstrate how to compute p-values using scBSP:
+Below is a straightforward example showcasing how to compute p-values with scBSP:
 
 ```python
 import scbsp
@@ -46,10 +54,10 @@ input_sp_mat = ...  # Cell Coordinates Matrix
 input_exp_mat_raw = ...  # Gene Expression Matrix
 
 # Set the optional parameters
-d1 = 1.0  # Example value
-d2 = 3.0  # Example value
+d1 = 1.0
+d2 = 3.0
 
-# Execute the calculation
+# Compute p-values
 p_values = scbsp.granp(input_sp_mat, input_exp_mat_raw, d1, d2)
 ```
 
