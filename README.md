@@ -15,12 +15,13 @@ To ensure scBSP functions optimally, the following dependencies are required:
 For enhanced scBSP using HNSW for distance calculation:
 - hnswlib (>= 0.8.0)
 
-To install scBSP, run the following command:
-
+### Installation Commands
 For Standard Installation (Using Ball Tree):
+
 `pip install scbsp`
 
 For Installation with HNSW (Hierarchical Navigable Small World Graphs):
+
 `pip install scbsp[hnsw]`
 
 ## Usage
