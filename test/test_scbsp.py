@@ -148,7 +148,7 @@ class TestGranp(unittest.TestCase):
 
         p_values = granp(input_sp_mat, input_exp_mat_raw)
 
-        self.assertEqual(sum([(i < 0.0001).astype(int) for i in p_values[0:999]]), 996)
+        self.assertEqual((p_values['p_values'].iloc[0:999] < 0.0001).sum(), 996)
 
 
 if __name__ == "__main__":

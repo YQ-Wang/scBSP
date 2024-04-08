@@ -204,7 +204,7 @@ def granp(
     d1: float = 1.0,
     d2: float = 3.0,
     leaf_size: int = 80,
-) -> List[float]:
+) -> pd.DataFrame:
     """
     Calculates the p-values for genomic data.
 
@@ -216,8 +216,15 @@ def granp(
         leaf_size: An integer that determines the maximum number of points after which the Ball Tree algorithm opts for a brute-force search approach.
 
     Returns:
-        A list of p-values.
+        A Pandas DataFrame with columns ['gene_names', 'p_values'].
     """
+    # Extract column names if input_exp_mat_raw is a Pandas DataFrame, else use indices
+    if isinstance(input_exp_mat_raw, pd.DataFrame):
+        gene_names = input_exp_mat_raw.columns.astype(str).tolist()
+        input_exp_mat_raw = csr_matrix(input_exp_mat_raw)
+    else:
+        gene_names = [f'Gene_{i}' for i in range(input_exp_mat_raw.shape[1])]
+        input_exp_mat_raw = input_exp_mat_raw if isspmatrix_csr(input_exp_mat_raw) else csr_matrix(input_exp_mat_raw)
 
     # Scale the distance thresholds according to the geometric mean of data spread.
     scale_factor = (
@@ -230,10 +237,6 @@ def granp(
     )
     d1 *= scale_factor
     d2 *= scale_factor
-
-    # Ensure the expression matrix is in csr_matrix format.
-    if not isspmatrix_csr(input_exp_mat_raw):
-        input_exp_mat_raw = csr_matrix(input_exp_mat_raw)
 
     t_matrix_sum = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size)
 
@@ -248,4 +251,7 @@ def granp(
         t_matrix_sum, scale=np.exp(log_norm_params[0]), s=log_norm_params[1]
     )
 
-    return p_values
+    return pd.DataFrame({
+        'gene_names': gene_names,
+        'p_values': p_values
+    })

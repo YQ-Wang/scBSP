@@ -1,4 +1,4 @@
-# scBSP
+# scBSP - A Fast Tool for Single-Cell Spatially Variable Genes Identifications on Large-Scale Spatially Resolved Transcriptomics Data
 
 scBSP is a dedicated software package crafted for the nuanced domain of biological data processing, emphasizing gene expression analysis and cell coordinate evaluation. It offers a streamlined method to calculate p-values for a set of genes by leveraging input matrices that encapsulate cell coordinates and gene expression data.
 
@@ -64,4 +64,4 @@ p_values = scbsp.granp(input_sp_mat, input_exp_mat_raw, d1, d2)
 
 ## Output
 
-The function returns a list of p-values, each corresponding to the genes in the provided gene expression matrix. These p-values help in identifying significant differences in gene expression across different cell coordinates, facilitating advanced biological data analysis.
+The function returns a Pandas DataFrame, featuring two columns: `gene_names` and `p_values`. Each row within this DataFrame represents a unique gene from the input gene expression matrix. The `gene_names` column specifies the identifier for each gene, while the `p_values` column quantifies the statistical significance of the expression differences observed across various cell coordinates. This structured format enhances the ease of conducting sophisticated biological analyses, allowing for straightforward identification and investigation of genes with significant expression variability.
