@@ -11,16 +11,16 @@ from typing import List, Tuple, Union
 
 import numpy as np
 import pandas as pd  # type: ignore
+import scipy
+import torch
 from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ignore
 from scipy.stats import gmean, lognorm
 
 try:
     import hnswlib
-
     use_hnsw = True
 except ImportError:
     from sklearn.neighbors import BallTree
-
     use_hnsw = False
 
 
@@ -97,9 +97,10 @@ def _binary_distance_matrix_threshold(
         (data, (rows, cols)),
         shape=(input_sparse_mat_array.shape[0], input_sparse_mat_array.shape[0]),
     )
-    sparse_mat += identity(input_sparse_mat_array.shape[0], format="csr", dtype=bool)
 
-    return sparse_mat
+    return sparse_mat + identity(
+        input_sparse_mat_array.shape[0], format="csr", dtype=bool
+    )
 
 
 def _calculate_sparse_variances(input_csr_mat: csr_matrix, axis: int) -> List[float]:
@@ -188,7 +189,26 @@ def _get_test_scores(
         patches_cells -= patches_cells_centroid
         sum_axis_0 = patches_cells.sum(axis=0).A.ravel()
         diag_matrix_sparse = _get_inverted_diag_matrix(sum_axis_0)
-        x_kj = input_exp_mat_norm.dot(patches_cells.dot(diag_matrix_sparse))
+
+        if torch.cuda.is_available():
+
+            # Convert the csr_matrix to PyTorch tensors and move to GPU
+            input_exp_mat_norm_torch = torch.tensor(
+                input_exp_mat_norm.toarray(), device="cuda"
+            )
+            patches_cells_torch = torch.tensor(patches_cells.toarray(), device="cuda")
+            diag_matrix_sparse_torch = torch.tensor(
+                diag_matrix_sparse.toarray(), device="cuda"
+            )
+
+            result = torch.matmul(
+                input_exp_mat_norm_torch,
+                torch.matmul(patches_cells_torch, diag_matrix_sparse_torch),
+            )
+            x_kj = scipy.sparse.csr_matrix(result.cpu().numpy())
+        else:
+            x_kj = input_exp_mat_norm.dot(patches_cells.dot(diag_matrix_sparse))
+
         return _calculate_sparse_variances(x_kj, axis=1)
 
     var_x = np.column_stack([_var_local_means(input_sp_mat, d_val, input_exp_mat_norm, leaf_size).A.ravel() for d_val in (d1, d2)])  # type: ignore
@@ -223,8 +243,12 @@ def granp(
         gene_names = input_exp_mat_raw.columns.astype(str).tolist()
         input_exp_mat_raw = csr_matrix(input_exp_mat_raw)
     else:
-        gene_names = [f'Gene_{i}' for i in range(input_exp_mat_raw.shape[1])]
-        input_exp_mat_raw = input_exp_mat_raw if isspmatrix_csr(input_exp_mat_raw) else csr_matrix(input_exp_mat_raw)
+        gene_names = [f"Gene_{i}" for i in range(input_exp_mat_raw.shape[1])]
+        input_exp_mat_raw = (
+            input_exp_mat_raw
+            if isspmatrix_csr(input_exp_mat_raw)
+            else csr_matrix(input_exp_mat_raw)
+        )
 
     # Scale the distance thresholds according to the geometric mean of data spread.
     scale_factor = (
@@ -251,7 +275,4 @@ def granp(
         t_matrix_sum, scale=np.exp(log_norm_params[0]), s=log_norm_params[1]
     )
 
-    return pd.DataFrame({
-        'gene_names': gene_names,
-        'p_values': p_values
-    })
+    return pd.DataFrame({"gene_names": gene_names, "p_values": p_values})
