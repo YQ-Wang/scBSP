@@ -28,7 +28,7 @@ setup(
         "Programming Language :: Python :: 3.12",
         "Operating System :: OS Independent",
     ],
-    install_requires=["numpy >= 1.24.4", "pandas >= 1.3.5", "scipy >= 1.10.1", "scikit-learn>=1.3.2"],
+    install_requires=["numpy >= 1.24.4", "pandas >= 1.3.5", "scipy >= 1.10.1", "scikit-learn >= 1.3.2"],
     extras_require={
         "hnsw": ["hnswlib >= 0.8.0"],
         "gpu": ["torch >= 1.10.0"],

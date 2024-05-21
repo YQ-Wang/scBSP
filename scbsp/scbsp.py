@@ -12,9 +12,14 @@ from typing import List, Tuple, Union
 import numpy as np
 import pandas as pd  # type: ignore
 import scipy
-import torch
 from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ignore
 from scipy.stats import gmean, lognorm
+
+try:
+    import torch
+    use_gpu = torch.cuda.is_available()
+except ImportError:
+    use_gpu = False
 
 try:
     import hnswlib
@@ -190,8 +195,7 @@ def _get_test_scores(
         sum_axis_0 = patches_cells.sum(axis=0).A.ravel()
         diag_matrix_sparse = _get_inverted_diag_matrix(sum_axis_0)
 
-        if torch.cuda.is_available():
-
+        if use_gpu is True:
             # Convert the csr_matrix to PyTorch tensors and move to GPU
             input_exp_mat_norm_torch = torch.tensor(
                 input_exp_mat_norm.toarray(), device="cuda"

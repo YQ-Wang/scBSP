@@ -26,6 +26,10 @@ For Installation with HNSW (Hierarchical Navigable Small World Graphs):
 
 `pip install "scbsp[hnsw]"`
 
+For Installation with GPU:
+
+`pip install "scbsp[gpu]"`
+
 ## Usage
 
 To use scBSP, you need to provide two primary inputs:
