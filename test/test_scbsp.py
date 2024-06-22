@@ -130,8 +130,9 @@ class TestTestScores(unittest.TestCase):
         d1 = 1.0
         d2 = 3.0
         leaf_size = 80
+        use_gpu = False
 
-        result = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size)
+        result = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size, use_gpu)
 
         # Check if the result is a numpy.ndarray
         self.assertIsInstance(result, list)

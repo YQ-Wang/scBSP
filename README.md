@@ -14,17 +14,10 @@ To ensure scBSP functions optimally, the following dependencies are required:
 - SciPy (>= 1.10.1)
 - scikit-learn (>=1.3.2)
 
-For enhanced scBSP using HNSW for distance calculation:
-- hnswlib (>= 0.8.0)
-
 ### Installation Commands
 For Standard Installation (Using Ball Tree):
 
 `pip install "scbsp"`
-
-For Installation with HNSW (Hierarchical Navigable Small World Graphs):
-
-`pip install "scbsp[hnsw]"`
 
 For Installation with GPU:
 
@@ -46,7 +39,8 @@ Additional parameters to specify include:
 
 - `d1`: A floating-point number. Default value is 1.0.
 - `d2`: A floating-point number. Default value is 3.0.
-- `leaf_size`: Optional integer defining the maximum point threshold for the Ball Tree algorithm to revert to brute-force search (default = 80). Not required for installations using HNSW.
+- `leaf_size`: Optional integer defining the maximum point threshold for the Ball Tree algorithm to revert to brute-force search (default = 80).
+- `use_gpu`: Optional boolean defining whether to use the GPU (default = False).
 
 
 ### Example
