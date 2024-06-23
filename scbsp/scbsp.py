@@ -16,6 +16,15 @@ from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ig
 from scipy.stats import gmean, lognorm  # type: ignore
 from sklearn.neighbors import BallTree  # type: ignore
 
+gpu_enabled = True
+
+try:
+    import torch   # type: ignore
+    if not torch.cuda.is_available():
+        gpu_enabled = False
+        print("CUDA is not available, using CPU instead.")
+except ImportError:
+    gpu_enabled = False
 
 def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     """
@@ -156,7 +165,7 @@ def _get_test_scores(
         sum_axis_0 = patches_cells.sum(axis=0).A.ravel()
         diag_matrix_sparse = _get_inverted_diag_matrix(sum_axis_0)
 
-        if use_gpu is True:
+        if use_gpu and gpu_enabled:
             # Convert the csr_matrix to PyTorch tensors and move to GPU
             input_exp_mat_norm_torch = torch.tensor( # type: ignore
                 input_exp_mat_norm.toarray(), device="cuda"
@@ -205,17 +214,6 @@ def granp(
     Returns:
         A Pandas DataFrame with columns ['gene_names', 'p_values'].
     """
-
-    # Check if GPU should be used and if it's available
-    if use_gpu is True:
-        try:
-            import torch   # type: ignore
-            if not torch.cuda.is_available():
-                print("CUDA is not available, setting use_gpu to False.")
-                use_gpu = False
-        except ImportError:
-            print("Torch is not available, setting use_gpu to False.")
-            use_gpu = False
 
     # Extract column names if input_exp_mat_raw is a Pandas DataFrame, else use indices
     if isinstance(input_exp_mat_raw, pd.DataFrame):
