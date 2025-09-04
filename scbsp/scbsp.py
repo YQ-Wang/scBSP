@@ -7,13 +7,13 @@ calculation, for the identification of spatially variable genes on
 large-scale data.
 """
 
-from typing import List, Union
+from typing import List, Union, Optional
 
 import numpy as np
 import pandas as pd  # type: ignore
 import scipy  # type: ignore
 from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ignore
-from scipy.stats import gmean, lognorm  # type: ignore
+from scipy.stats import gmean, lognorm, chi2, norm  # type: ignore
 from sklearn.neighbors import BallTree  # type: ignore
 
 gpu_enabled = True
@@ -97,7 +97,7 @@ def _binary_distance_matrix_threshold(
     )
 
 
-def _calculate_sparse_variances(input_csr_mat: csr_matrix, axis: int) -> List[float]:
+def _calculate_sparse_variances(input_csr_mat: csr_matrix, axis: int) -> np.matrix:
     """
     Calculates the variances along a given axis for a csr_matrix.
 
@@ -147,12 +147,12 @@ def _get_test_scores(
         return diags(diag_data, offsets=0, format="csr")
 
     def _var_local_means(
-        input_sp_mat: csr_matrix,
+        input_sp_mat: np.ndarray,
         d_val: float,
         input_exp_mat_norm: csr_matrix,
         leaf_size: int,
         use_gpu: bool
-    ) -> List[float]:
+    ) -> np.matrix:
         patches_cells = _binary_distance_matrix_threshold(
             input_sp_mat, d_val, leaf_size
         )
@@ -262,3 +262,127 @@ def granp(
     p_values = list(p_value_generator())
 
     return pd.DataFrame({"gene_names": gene_names, "p_values": p_values})
+
+
+def combine_p_values(
+    list_of_pvalues: List[pd.DataFrame],
+    method: str = "fisher"
+) -> pd.DataFrame:
+    """
+    Combines p-values across multiple samples from scBSP using Fisher's or Stouffer's method.
+    
+    Given the results from multiple samples with gene names and p-values, this
+    function merges them by gene and computes a combined p-value for each gene.
+    
+    Args:
+        list_of_pvalues: A list of DataFrames, each with columns 'gene_names' and 'p_values'.
+        method: Combination method. One of "fisher" (default) or "stouffer".
+    
+    Returns:
+        A DataFrame with columns:
+        - gene_names: The gene identifiers
+        - number_samples: Number of datasets contributing to this gene
+        - calibrated_p_values: The combined p-value
+    
+    Raises:
+        ValueError: If method is not "fisher" or "stouffer", or if input DataFrames 
+                    don't have required columns.
+    
+    Examples:
+        >>> df1 = pd.DataFrame({'gene_names': ['A', 'B', 'C'],
+        ...                     'p_values': [0.01, 0.20, 0.03]})
+        >>> df2 = pd.DataFrame({'gene_names': ['A', 'C', 'D'],
+        ...                     'p_values': [0.04, 0.10, 0.50]})
+        >>> df3 = pd.DataFrame({'gene_names': ['B', 'C', 'E'],
+        ...                     'p_values': [0.05, 0.02, 0.80]})
+        >>> result = combine_p_values([df1, df2, df3], method="fisher")
+    """
+    
+    # Validate method
+    if method not in ["fisher", "stouffer"]:
+        raise ValueError(f"Method must be 'fisher' or 'stouffer', got '{method}'")
+    
+    # Validate input DataFrames
+    for i, df in enumerate(list_of_pvalues):
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError(f"Element {i} in list_of_pvalues is not a DataFrame")
+        if 'gene_names' not in df.columns or 'p_values' not in df.columns:
+            raise ValueError(f"DataFrame {i} must have 'gene_names' and 'p_values' columns")
+    
+    # If empty list, return empty DataFrame
+    if not list_of_pvalues:
+        return pd.DataFrame(columns=['gene_names', 'number_samples', 'calibrated_p_values'])
+    
+    # Rename p_values columns to avoid conflicts during merge
+    dfs_renamed = []
+    for i, df in enumerate(list_of_pvalues):
+        df_copy = df.copy()
+        df_copy = df_copy.rename(columns={'p_values': f'p_values_{i+1}'})
+        dfs_renamed.append(df_copy)
+    
+    # Merge all DataFrames on gene_names
+    merged = dfs_renamed[0]
+    for df in dfs_renamed[1:]:
+        merged = pd.merge(merged, df, on='gene_names', how='outer')
+    
+    # Get p-value columns
+    pval_cols = [col for col in merged.columns if col.startswith('p_values_')]
+    
+    # Calculate combined p-values for each gene
+    combined_results = []
+    for _, row in merged.iterrows():
+        gene_name = row['gene_names']
+        pvals = [row[col] for col in pval_cols]
+        
+        # Filter out NaN values
+        valid_pvals = [p for p in pvals if pd.notna(p)]
+        k = len(valid_pvals)
+        
+        if k == 0:
+            # No valid p-values for this gene
+            combined_results.append({
+                'gene_names': gene_name,
+                'number_samples': 0,
+                'calibrated_p_values': np.nan
+            })
+            continue
+        
+        # Apply combination method
+        if method == "fisher":
+            # Fisher's method: -2 * sum(log(p_i))
+            # Avoid log(0) by using a small epsilon
+            epsilon = 1e-300
+            valid_pvals_safe = [max(p, epsilon) for p in valid_pvals]
+            stat = -2 * sum(np.log(valid_pvals_safe))
+            # Combined p-value from chi-squared distribution with 2k degrees of freedom
+            combined_pval = 1 - chi2.cdf(stat, 2 * k)
+            
+        elif method == "stouffer":
+            # Stouffer's method: sum(Z_i) / sqrt(k)
+            # Convert p-values to z-scores
+            # Use two-tailed conversion: z = qnorm(1 - p/2) * sign(0.5 - p)
+            z_scores = []
+            for p in valid_pvals:
+                # Avoid extreme values
+                p_safe = max(min(p, 1 - 1e-15), 1e-15)
+                z = norm.ppf(1 - p_safe/2) * np.sign(0.5 - p_safe)
+                z_scores.append(z)
+            
+            # Combined z-score
+            z_combined = sum(z_scores) / np.sqrt(k)
+            # Convert back to p-value (two-tailed)
+            combined_pval = 2 * (1 - norm.cdf(abs(z_combined)))
+        
+        combined_results.append({
+            'gene_names': gene_name,
+            'number_samples': k,
+            'calibrated_p_values': combined_pval
+        })
+    
+    # Create result DataFrame
+    result_df = pd.DataFrame(combined_results)
+    
+    # Ensure number_samples is integer type
+    result_df['number_samples'] = result_df['number_samples'].astype(int)
+    
+    return result_df
