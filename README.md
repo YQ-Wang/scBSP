@@ -25,6 +25,8 @@ For Installation with GPU:
 
 ## Usage
 
+### Basic Usage
+
 To use scBSP, you need to provide two primary inputs:
 
 1. **Cell Coordinates Matrix (`input_sp_mat`)**: 
@@ -62,9 +64,50 @@ d2 = 3.0
 p_values = scbsp.granp(input_sp_mat, input_exp_mat_raw, d1, d2)
 ```
 
+### Combining P-values Across Multiple Samples
+
+When you have multiple samples or datasets and want to combine their p-values to identify consistently significant genes, you can use the `combine_p_values` function:
+
+```python
+import scbsp
+import pandas as pd
+
+# Assume you have p-values from three different samples
+sample1_pvalues = scbsp.granp(sp_mat1, exp_mat1)
+sample2_pvalues = scbsp.granp(sp_mat2, exp_mat2)
+sample3_pvalues = scbsp.granp(sp_mat3, exp_mat3)
+
+# Combine p-values using Fisher's method (default)
+combined_results = scbsp.combine_p_values(
+    [sample1_pvalues, sample2_pvalues, sample3_pvalues],
+    method="fisher"
+)
+
+# Or use Stouffer's method
+combined_results_stouffer = scbsp.combine_p_values(
+    [sample1_pvalues, sample2_pvalues, sample3_pvalues],
+    method="stouffer"
+)
+```
+
+The `combine_p_values` function supports two methods:
+- **Fisher's method**: Combines p-values using Fisher's combined probability test (default)
+- **Stouffer's method**: Combines p-values using Stouffer's Z-score method
+
 ## Output
 
-The function returns a Pandas DataFrame, featuring two columns: `gene_names` and `p_values`. Each row within this DataFrame represents a unique gene from the input gene expression matrix. The `gene_names` column specifies the identifier for each gene, while the `p_values` column quantifies the statistical significance of the expression differences observed across various cell coordinates. This structured format enhances the ease of conducting sophisticated biological analyses, allowing for straightforward identification and investigation of genes with significant expression variability.
+### `granp` Function Output
+The `granp` function returns a Pandas DataFrame with two columns:
+- `gene_names`: The identifier for each gene
+- `p_values`: The p-value quantifying the statistical significance of spatial variability for each gene
+
+### `combine_p_values` Function Output
+The `combine_p_values` function returns a Pandas DataFrame with three columns:
+- `gene_names`: The identifier for each gene
+- `number_samples`: The number of samples/datasets where each gene was present
+- `calibrated_p_values`: The combined p-value across samples using the specified method
+
+Each row in these DataFrames represents a unique gene from the input gene expression matrix. This structured format enhances the ease of conducting sophisticated biological analyses, allowing for straightforward identification and investigation of genes with significant expression variability.
 
 ## Reference
 - Li, Jinpu, Yiqing Wang, Mauminah Azam Raina, Chunhui Xu, Li Su, Qi Guo, Qin Ma, Juexin Wang, and Dong Xu. "scBSP: A fast and accurate tool for identifying spatially variable genes from spatial transcriptomic data." bioRxiv (2024).

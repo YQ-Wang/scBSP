@@ -5,4 +5,4 @@ Created on Mon Nov  6 20:19:23 2023
 """
 
 
-from scbsp.scbsp import granp
+from scbsp.scbsp import granp, combine_p_values
