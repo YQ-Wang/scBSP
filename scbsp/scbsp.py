@@ -96,11 +96,12 @@ def _binary_distance_matrix_threshold(
     )
 
 
-def _calculate_sparse_variances(input_csr_mat: csr_matrix, axis: int) -> np.matrix:
+def _calculate_sparse_variances(input_csr_mat: csr_matrix, axis: int) -> np.ndarray:
     """Calculates the variances along a given axis for a csr_matrix."""
     input_csr_mat_squared = input_csr_mat.copy()
     input_csr_mat_squared.data **= 2
-    return input_csr_mat_squared.mean(axis) - np.square(input_csr_mat.mean(axis))
+    result = input_csr_mat_squared.mean(axis) - np.square(input_csr_mat.mean(axis))
+    return np.asarray(result).ravel() if axis == 0 else np.asarray(result)
 
 
 def _get_test_scores(
@@ -133,40 +134,41 @@ def _get_test_scores(
 
         if use_gpu and gpu_enabled:
             import warnings
-            warnings.filterwarnings('ignore', category=UserWarning)
-            
-            try:
-                # Memory-efficient GPU multiplication strategy: (Patches^T @ Exp^T)^T
-                # This avoids O(Cells^2) dense matrix transfers by keeping patches sparse.
-                exp_t_dense_gpu = torch.tensor(input_exp_mat_norm.toarray().T.astype(np.float32), device='cuda')
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=UserWarning)
                 
-                patches_t_sparse_gpu = torch.sparse_csr_tensor(
-                    torch.tensor(patches_cells.T.indptr, dtype=torch.int64, device='cuda'),
-                    torch.tensor(patches_cells.T.indices, dtype=torch.int64, device='cuda'),
-                    torch.tensor(patches_cells.T.data.astype(np.float32), device='cuda'),
-                    size=patches_cells.T.shape
-                )
-                
-                # Sparse-Dense Multiplication on GPU
-                res_t_gpu = torch.sparse.mm(patches_t_sparse_gpu, exp_t_dense_gpu)
-                
-                # Scale and calculate statistics
-                inv_sum_gpu = torch.tensor(inv_sum.astype(np.float32), device='cuda').view(-1, 1)
-                res_t_gpu *= inv_sum_gpu
-                
-                mean_x = res_t_gpu.mean(dim=0)
-                mean_x2 = (res_t_gpu**2).mean(dim=0)
-                var_gpu = mean_x2 - mean_x**2
-                
-                result_vars = var_gpu.cpu().numpy()
-                
-                del res_t_gpu, exp_t_dense_gpu, patches_t_sparse_gpu, inv_sum_gpu, var_gpu, mean_x, mean_x2
-                
-                return np.matrix(result_vars).T
-                
-            except Exception as e:
-                print(f"GPU optimization failed, falling back to CPU: {e}")
-                x_kj = input_exp_mat_norm @ patches_scaled
+                try:
+                    # Memory-efficient GPU multiplication strategy: (Patches^T @ Exp^T)^T
+                    # This avoids O(Cells^2) dense matrix transfers by keeping patches sparse.
+                    exp_t_dense_gpu = torch.tensor(input_exp_mat_norm.toarray().T.astype(np.float32), device='cuda')
+                    
+                    patches_t_sparse_gpu = torch.sparse_csr_tensor(
+                        torch.tensor(patches_cells.T.indptr, dtype=torch.int64, device='cuda'),
+                        torch.tensor(patches_cells.T.indices, dtype=torch.int64, device='cuda'),
+                        torch.tensor(patches_cells.T.data.astype(np.float32), device='cuda'),
+                        size=patches_cells.T.shape
+                    )
+                    
+                    # Sparse-Dense Multiplication on GPU
+                    res_t_gpu = torch.sparse.mm(patches_t_sparse_gpu, exp_t_dense_gpu)
+                    
+                    # Scale and calculate statistics
+                    inv_sum_gpu = torch.tensor(inv_sum.astype(np.float32), device='cuda').view(-1, 1)
+                    res_t_gpu *= inv_sum_gpu
+                    
+                    mean_x = res_t_gpu.mean(dim=0)
+                    mean_x2 = (res_t_gpu**2).mean(dim=0)
+                    var_gpu = mean_x2 - mean_x**2
+                    
+                    result_vars = var_gpu.cpu().numpy()
+                    
+                    del res_t_gpu, exp_t_dense_gpu, patches_t_sparse_gpu, inv_sum_gpu, var_gpu, mean_x, mean_x2
+                    
+                    return result_vars.reshape(-1, 1)
+                    
+                except Exception as e:
+                    print(f"GPU optimization failed, falling back to CPU: {e}")
+                    x_kj = input_exp_mat_norm @ patches_scaled
         else:
             x_kj = input_exp_mat_norm @ patches_scaled
 
@@ -174,12 +176,18 @@ def _get_test_scores(
 
     def var_x_generator():
         for d_val in (d1, d2):
-            yield _var_local_means(input_sp_mat, d_val, input_exp_mat_norm, leaf_size, use_gpu).A.ravel()
+            result = _var_local_means(input_sp_mat, d_val, input_exp_mat_norm, leaf_size, use_gpu)
+            yield result.ravel()
 
     var_x = np.column_stack(list(var_x_generator()))
-    var_x_0_add = _calculate_sparse_variances(input_exp_mat_raw, axis=1).A.ravel()
+    var_x_0_add = _calculate_sparse_variances(input_exp_mat_raw, axis=1).ravel()
     var_x_0_add /= max(var_x_0_add)
-    t_matrix = (var_x[:, 1] / var_x[:, 0]) * var_x_0_add
+    # Safe division to avoid RuntimeWarning when var_x[:, 0] contains zeros
+    t_matrix = np.divide(
+        var_x[:, 1], var_x[:, 0],
+        out=np.zeros_like(var_x[:, 1]),
+        where=var_x[:, 0] != 0
+    ) * var_x_0_add
     return t_matrix.tolist()
 
 
