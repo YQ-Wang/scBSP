@@ -6,20 +6,27 @@ This package utilizes a granularity-based dimension-agnostic tool, single-cell b
 
 ## Installation
 
+### GPU Hardware Compatibility
+
+For the best experience with GPU acceleration, please note the following hardware-specific requirements:
+
+- **RTX 20, 30, 40-series**: Compatible with most PyTorch versions (torch >= 1.10.0).
+- **RTX 50-series (Blackwell)**: Requires **Python 3.13** and **PyTorch 2.10+** (CUDA 12.8+). If you are using an older Python version, the package will automatically fall back to CPU mode for stability.
+
 ### Dependencies
 To ensure scBSP functions optimally, the following dependencies are required:
-- Python (>= 3.8)
-- NumPy (>= 1.24.4)
-- Pandas (>= 1.3.5)
-- SciPy (>= 1.10.1)
-- scikit-learn (>=1.3.2)
+- Python (>= 3.9, 3.13 recommended)
+- NumPy (>= 1.26.0)
+- Pandas (>= 2.1.3)
+- SciPy (>= 1.11.3)
+- scikit-learn (>=1.4.1)
 
 ### Installation Commands
 For Standard Installation (Using Ball Tree):
 
 `pip install "scbsp"`
 
-For Installation with GPU:
+For Installation with GPU acceleration (PyTorch-based):
 
 `pip install "scbsp[gpu]"`
 
@@ -42,7 +49,18 @@ Additional parameters to specify include:
 - `d1`: A floating-point number. Default value is 1.0.
 - `d2`: A floating-point number. Default value is 3.0.
 - `leaf_size`: Optional integer defining the maximum point threshold for the Ball Tree algorithm to revert to brute-force search (default = 80).
-- `use_gpu`: Optional boolean defining whether to use the GPU (default = False).
+- `use_gpu`: Optional boolean defining whether to use the GPU (default = False). When set to `True`, the package uses PyTorch sparse tensors to accelerate computations.
+
+### Performance
+
+For large-scale spatial transcriptomics data with 10,000 genes, `scBSP` with GPU acceleration provides significant speedups.
+
+| Cells | Genes | CPU Time | GPU Time (RTX 5070 Ti) | Speedup |
+|-------|-------|----------|------------------------|---------|
+| 2,308 | 10,000 | 3.35s | 1.56s | 2.15x |
+| 4,616 | 10,000 | 6.72s | 3.03s | 2.22x |
+| 9,232 | 10,000 | 13.53s | 7.02s | 1.93x |
+| 50,000 | 200 | 4.50s | 3.36s | 1.34x |
 
 
 ### Example

@@ -21,16 +21,15 @@ setup(
     classifiers=[
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Operating System :: OS Independent",
     ],
     install_requires=["numpy >= 1.24.4", "pandas >= 1.3.5", "scipy >= 1.10.1", "scikit-learn >= 1.3.2"],
     extras_require={
-        "gpu": ["torch >= 1.10.0"],
+        "gpu": ["torch >= 1.10.0"],  # Note: Blackwell GPUs (RTX 50-series) require torch >= 2.7+ and Python 3.12+
     },
-    python_requires=">=3.8",
+    python_requires=">=3.10",
 )

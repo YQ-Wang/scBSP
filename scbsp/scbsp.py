@@ -17,14 +17,17 @@ from scipy.stats import gmean, lognorm, chi2, norm  # type: ignore
 from sklearn.neighbors import BallTree  # type: ignore
 
 gpu_enabled = True
-
+gpu_backend = None  # "torch_sparse", "torch_dense", or "cupy"
 try:
-    import torch   # type: ignore
-    if not torch.cuda.is_available():
+    import torch  # type: ignore
+    if torch.cuda.is_available():
+        gpu_backend = "torch_sparse"
+    else:
         gpu_enabled = False
         print("CUDA is not available, using CPU instead.")
 except ImportError:
     gpu_enabled = False
+    gpu_backend = None
 
 def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     """
@@ -53,7 +56,6 @@ def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
         ]
     )
 
-    # Scale the data based on the row max
     data_scaled = data / np.repeat(row_max, row_indices)
     scaled_matrix = csr_matrix((data_scaled, (rows, cols)), shape=input_exp_mat.shape)
 
@@ -142,8 +144,9 @@ def _get_test_scores(
     input_exp_mat_raw = input_exp_mat_raw.transpose()
 
     def _get_inverted_diag_matrix(sum_axis_0: np.ndarray) -> csr_matrix:
+        diag_data = np.zeros_like(sum_axis_0, dtype=np.float32)
         with np.errstate(divide="ignore", invalid="ignore"):
-            diag_data = np.reciprocal(sum_axis_0, where=sum_axis_0 != 0)
+            np.reciprocal(sum_axis_0, where=sum_axis_0 != 0, out=diag_data)
         return diags(diag_data, offsets=0, format="csr")
 
     def _var_local_means(
@@ -165,22 +168,56 @@ def _get_test_scores(
         sum_axis_0 = patches_cells.sum(axis=0).A.ravel()
         diag_matrix_sparse = _get_inverted_diag_matrix(sum_axis_0)
 
-        if use_gpu and gpu_enabled:
-            # Convert the csr_matrix to PyTorch tensors and move to GPU
-            input_exp_mat_norm_torch = torch.tensor(
-                input_exp_mat_norm.toarray(), device="cuda"
-            )
-            patches_cells_torch = torch.tensor(patches_cells.toarray(), device="cuda")
-            diag_matrix_sparse_torch = torch.tensor(
-                diag_matrix_sparse.toarray(), device="cuda"
-            )
+        if not isspmatrix_csr(input_exp_mat_norm):
+            input_exp_mat_norm = input_exp_mat_norm.tocsr()
+        input_exp_mat_norm.sort_indices()
+        patches_cells.sort_indices()
+        
+        diag_data = diag_matrix_sparse.diagonal().astype(np.float32)
 
-            result = torch.matmul(
-                input_exp_mat_norm_torch,
-                torch.matmul(patches_cells_torch, diag_matrix_sparse_torch),
-            )
-            x_kj = scipy.sparse.csr_matrix(result.cpu().numpy())
-            del result  # Free up GPU memory
+        if use_gpu and gpu_enabled:
+            if gpu_backend == "torch_sparse":
+                import torch
+                import warnings
+                warnings.filterwarnings('ignore', category=UserWarning)
+                
+                try:
+                    exp_gpu = torch.sparse_csr_tensor(
+                        torch.tensor(input_exp_mat_norm.indptr, dtype=torch.int64, device='cuda'),
+                        torch.tensor(input_exp_mat_norm.indices, dtype=torch.int64, device='cuda'),
+                        torch.tensor(input_exp_mat_norm.data, dtype=torch.float32, device='cuda'),
+                        size=input_exp_mat_norm.shape
+                    )
+                    
+                    patches_gpu = torch.sparse_csr_tensor(
+                        torch.tensor(patches_cells.indptr, dtype=torch.int64, device='cuda'),
+                        torch.tensor(patches_cells.indices, dtype=torch.int64, device='cuda'),
+                        torch.tensor(patches_cells.data.astype(np.float32), device='cuda'),
+                        size=patches_cells.shape
+                    )
+                    
+                    diag_data_gpu = torch.tensor(diag_data, dtype=torch.float32, device='cuda')
+                    
+                    patches_dense_gpu = patches_gpu.to_dense()
+                    res_dense = torch.sparse.mm(exp_gpu, patches_dense_gpu)
+                    res_dense *= diag_data_gpu
+                    
+                    mean_x = res_dense.mean(dim=1)
+                    mean_x2 = (res_dense**2).mean(dim=1)
+                    var_gpu = mean_x2 - mean_x**2
+                    
+                    result_vars = var_gpu.cpu().numpy()
+                    
+                    del res_dense, patches_dense_gpu, exp_gpu, patches_gpu, diag_data_gpu, var_gpu, mean_x, mean_x2
+                    torch.cuda.empty_cache()
+                    
+                    return np.matrix(result_vars).T
+                    
+                except Exception as e:
+                    print(f"GPU optimization failed, falling back to CPU: {e}")
+                    x_kj = input_exp_mat_norm @ (patches_cells @ diag_matrix_sparse)
+            else:
+                x_kj = input_exp_mat_norm @ (patches_cells @ diag_matrix_sparse)
         else:
             x_kj = input_exp_mat_norm @ (patches_cells @ diag_matrix_sparse)
 
