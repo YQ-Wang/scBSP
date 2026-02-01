@@ -136,39 +136,31 @@ def _get_test_scores(
             warnings.filterwarnings('ignore', category=UserWarning)
             
             try:
-                # Optimized Sparse PyTorch Implementation
-                if not isspmatrix_csr(input_exp_mat_norm):
-                    input_exp_mat_norm = input_exp_mat_norm.tocsr()
-                input_exp_mat_norm.sort_indices()
+                # Memory-efficient GPU multiplication strategy: (Patches^T @ Exp^T)^T
+                # This avoids O(Cells^2) dense matrix transfers by keeping patches sparse.
+                exp_t_dense_gpu = torch.tensor(input_exp_mat_norm.toarray().T.astype(np.float32), device='cuda')
                 
-                exp_gpu = torch.sparse_csr_tensor(
-                    torch.tensor(input_exp_mat_norm.indptr, dtype=torch.int64, device='cuda'),
-                    torch.tensor(input_exp_mat_norm.indices, dtype=torch.int64, device='cuda'),
-                    torch.tensor(input_exp_mat_norm.data, dtype=torch.float32, device='cuda'),
-                    size=input_exp_mat_norm.shape
+                patches_t_sparse_gpu = torch.sparse_csr_tensor(
+                    torch.tensor(patches_cells.T.indptr, dtype=torch.int64, device='cuda'),
+                    torch.tensor(patches_cells.T.indices, dtype=torch.int64, device='cuda'),
+                    torch.tensor(patches_cells.T.data.astype(np.float32), device='cuda'),
+                    size=patches_cells.T.shape
                 )
                 
-                # patches_scaled is too large for O(Cells^2) if dense on GPU.
-                # However, patches_scaled @ diag is what we need.
-                # Here we do: (Exp @ Patches) @ Diag
-                # But our current logic is x_kj = Exp @ Patches_scaled.
+                # Sparse-Dense Multiplication on GPU
+                res_t_gpu = torch.sparse.mm(patches_t_sparse_gpu, exp_t_dense_gpu)
                 
-                # To keep O(Genes x Cells), we convert SMALLer matrix to dense if needed, 
-                # but patches_scaled is Cells x Cells. 
-                # Our optimization: Exp(sparse) @ Patches(dense_on_gpu_chunked or chunked).
+                # Scale and calculate statistics
+                inv_sum_gpu = torch.tensor(inv_sum.astype(np.float32), device='cuda').view(-1, 1)
+                res_t_gpu *= inv_sum_gpu
                 
-                # For simplicity and correctness in this restoration:
-                patches_dense_gpu = torch.tensor(patches_scaled.toarray().astype(np.float32), device='cuda')
-                res_dense = torch.sparse.mm(exp_gpu, patches_dense_gpu)
-                
-                mean_x = res_dense.mean(dim=1)
-                mean_x2 = (res_dense**2).mean(dim=1)
+                mean_x = res_t_gpu.mean(dim=0)
+                mean_x2 = (res_t_gpu**2).mean(dim=0)
                 var_gpu = mean_x2 - mean_x**2
                 
                 result_vars = var_gpu.cpu().numpy()
                 
-                del res_dense, patches_dense_gpu, exp_gpu, var_gpu, mean_x, mean_x2
-                torch.cuda.empty_cache()
+                del res_t_gpu, exp_t_dense_gpu, patches_t_sparse_gpu, inv_sum_gpu, var_gpu, mean_x, mean_x2
                 
                 return np.matrix(result_vars).T
                 
