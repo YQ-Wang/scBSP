@@ -18,6 +18,7 @@ from sklearn.neighbors import BallTree  # type: ignore
 
 gpu_enabled = True
 
+
 try:
     import torch   # type: ignore
     if not torch.cuda.is_available():
@@ -25,6 +26,69 @@ try:
         print("CUDA is not available, using CPU instead.")
 except ImportError:
     gpu_enabled = False
+
+def _scipy_to_torch_sparse(mat: csr_matrix) -> "torch.Tensor":
+    """Helper to convert scipy CSR to torch sparse CSR."""
+    if not gpu_enabled:
+        raise RuntimeError("GPU not enabled")
+    mat = mat.astype(np.float32)
+    crow = torch.tensor(mat.indptr, dtype=torch.int64, device="cuda")
+    col = torch.tensor(mat.indices, dtype=torch.int64, device="cuda")
+    val = torch.tensor(mat.data, dtype=torch.float32, device="cuda")
+    return torch.sparse_csr_tensor(crow, col, val, size=mat.shape)
+
+
+def _gpu_sparse_matmul(
+    sparse_a: Union[csr_matrix, "torch.Tensor"], 
+    sparse_b: Union[csr_matrix, "torch.Tensor"]
+) -> csr_matrix:
+    """
+    Performs sparse matrix multiplication on GPU using PyTorch sparse CSR tensors.
+    
+    Args:
+        sparse_a: Left matrix (csr_matrix or torch.Tensor).
+        sparse_b: Right matrix (csr_matrix or torch.Tensor).
+    
+    Returns:
+        Result as a scipy csr_matrix.
+    """
+    if not gpu_enabled:
+        # Fallback if somehow called without GPU, but inputs must be scipy
+        if not isinstance(sparse_a, csr_matrix) or not isinstance(sparse_b, csr_matrix):
+            raise ValueError("GPU disabled but inputs are not scipy matrices")
+        return sparse_a @ sparse_b
+    
+    # Convert to torch if needed
+    a_torch = sparse_a if isinstance(sparse_a, torch.Tensor) else _scipy_to_torch_sparse(sparse_a)
+    b_torch = sparse_b if isinstance(sparse_b, torch.Tensor) else _scipy_to_torch_sparse(sparse_b)
+    
+    # Perform sparse matmul on GPU
+    result = torch.sparse.mm(a_torch, b_torch)
+    
+    # Convert back to scipy CSR
+    if result.is_sparse_csr:
+        result_cpu = result.cpu()
+        result_csr = csr_matrix(
+            (result_cpu.values().numpy(), 
+             result_cpu.col_indices().numpy(), 
+             result_cpu.crow_indices().numpy()),
+            shape=result.shape
+        )
+    else:
+        # Fallback: convert dense result back to sparse
+        result_csr = csr_matrix(result.cpu().numpy())
+    
+    # Free GPU memory (only if we created new tensors)
+    if not isinstance(sparse_a, torch.Tensor):
+        del a_torch
+    if not isinstance(sparse_b, torch.Tensor):
+        del b_torch
+    del result
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    return result_csr
+
 
 def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     """
@@ -40,18 +104,20 @@ def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     if input_exp_mat.shape[0] == 0 or input_exp_mat.shape[1] == 0:
         return input_exp_mat
 
-    data = input_exp_mat.data
+    data = input_exp_mat.data.copy()
     rows, cols = input_exp_mat.nonzero()
 
     row_indices = np.diff(input_exp_mat.indptr)
     row_idx = np.r_[0, np.cumsum(row_indices)]
 
-    row_max = np.array(
-        [
-            data[start:end].max() if end > start else 1
-            for start, end in zip(row_idx[:-1], row_idx[1:])
-        ]
-    )
+    # Vectorized row max computation using reduceat
+    non_empty_mask = row_indices > 0
+    row_max = np.ones(input_exp_mat.shape[0], dtype=data.dtype)
+
+    if non_empty_mask.any():
+        # Get starting indices only for non-empty rows
+        non_empty_starts = row_idx[:-1][non_empty_mask]
+        row_max[non_empty_mask] = np.maximum.reduceat(data, non_empty_starts)
 
     # Scale the data based on the row max
     data_scaled = data / np.repeat(row_max, row_indices)
@@ -74,27 +140,44 @@ def _binary_distance_matrix_threshold(
     Returns:
         A csr_matrix representing the binary distance matrix.
     """
-
     ball_tree = BallTree(input_sparse_mat_array, leaf_size=leaf_size)
+    return _binary_distance_matrix_with_tree(ball_tree, input_sparse_mat_array, d_val)
+
+
+def _binary_distance_matrix_with_tree(
+    ball_tree: BallTree, input_sparse_mat_array: np.ndarray, d_val: float
+) -> csr_matrix:
+    """
+    Creates a binary distance matrix using a pre-built BallTree.
+
+    Args:
+        ball_tree: Pre-built BallTree for the input points.
+        input_sparse_mat_array: The input sparse matrix array.
+        d_val: The distance threshold.
+
+    Returns:
+        A csr_matrix representing the binary distance matrix.
+    """
     indices = ball_tree.query_radius(
         input_sparse_mat_array, r=d_val, return_distance=False
     )
-    
-    def generate_data():
-        for i, idx in enumerate(indices):
-            yield from ((i, j, 1) for j in idx)
 
-    rows, cols, data = zip(*generate_data())
-    
+    # Vectorized CSR construction - avoid generator overhead
+    lengths = np.array([len(idx) for idx in indices])
+    total_nnz = lengths.sum()
+
+    # Allocate arrays directly using numpy operations
+    rows = np.repeat(np.arange(len(indices)), lengths)
+    cols = np.concatenate(indices) if total_nnz > 0 else np.array([], dtype=np.intp)
+    data = np.ones(total_nnz, dtype=np.int8)
+
     sparse_mat = csr_matrix(
         (data, (rows, cols)),
         shape=(input_sparse_mat_array.shape[0], input_sparse_mat_array.shape[0]),
         dtype=np.int8
     )
 
-    return sparse_mat + identity(
-        input_sparse_mat_array.shape[0], format="csr", dtype=np.int8
-    )
+    return sparse_mat
 
 
 def _calculate_sparse_variances(input_csr_mat: csr_matrix, axis: int) -> np.matrix:
@@ -141,59 +224,84 @@ def _get_test_scores(
     input_exp_mat_norm = _scale_sparse_matrix(input_exp_mat_raw).transpose()
     input_exp_mat_raw = input_exp_mat_raw.transpose()
 
-    def _get_inverted_diag_matrix(sum_axis_0: np.ndarray) -> csr_matrix:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            diag_data = np.reciprocal(sum_axis_0, where=sum_axis_0 != 0)
-        return diags(diag_data, offsets=0, format="csr")
+    ball_tree = BallTree(input_sp_mat, leaf_size=leaf_size)
+
+    input_exp_mat_norm_gpu = None
+    if use_gpu and gpu_enabled:
+        try:
+            input_exp_mat_norm_gpu = _scipy_to_torch_sparse(input_exp_mat_norm)
+        except Exception as e:
+            print(f"Warning: GPU conversion failed: {e}. Falling back to CPU/per-call conversion.")
+            use_gpu = False 
 
     def _var_local_means(
+        ball_tree: BallTree,
         input_sp_mat: np.ndarray,
         d_val: float,
         input_exp_mat_norm: csr_matrix,
-        leaf_size: int,
-        use_gpu: bool
+        use_gpu: bool,
+        input_exp_mat_norm_gpu: Optional["torch.Tensor"] = None
     ) -> np.matrix:
-        patches_cells = _binary_distance_matrix_threshold(
-            input_sp_mat, d_val, leaf_size
+        patches_cells = _binary_distance_matrix_with_tree(
+            ball_tree, input_sp_mat, d_val
         )
-        patches_cells_centroid = diags(
-            (patches_cells.sum(axis=1) > 1).astype(np.float32).A.ravel(),
-            offsets=0,
-            format="csr",
-        )
-        patches_cells -= patches_cells_centroid
-        sum_axis_0 = patches_cells.sum(axis=0).A.ravel()
-        diag_matrix_sparse = _get_inverted_diag_matrix(sum_axis_0)
+        
+        sum_axis_0 = patches_cells.sum(axis=0).A.ravel().astype(np.float64)
+
+        inv_sum = np.reciprocal(sum_axis_0, where=sum_axis_0 != 0, out=np.zeros_like(sum_axis_0, dtype=np.float64))
+        patches_scaled = patches_cells.astype(np.float64).multiply(inv_sum)
 
         if use_gpu and gpu_enabled:
-            # Convert the csr_matrix to PyTorch tensors and move to GPU
-            input_exp_mat_norm_torch = torch.tensor(
-                input_exp_mat_norm.toarray(), device="cuda"
-            )
-            patches_cells_torch = torch.tensor(patches_cells.toarray(), device="cuda")
-            diag_matrix_sparse_torch = torch.tensor(
-                diag_matrix_sparse.toarray(), device="cuda"
-            )
+            n_genes = input_exp_mat_norm.shape[0]
+            batch_size = 5000 
+            
+            lhs = input_exp_mat_norm_gpu if input_exp_mat_norm_gpu is not None else input_exp_mat_norm
 
-            result = torch.matmul(
-                input_exp_mat_norm_torch,
-                torch.matmul(patches_cells_torch, diag_matrix_sparse_torch),
-            )
-            x_kj = scipy.sparse.csr_matrix(result.cpu().numpy())
-            del result  # Free up GPU memory
+            if n_genes <= batch_size:
+                x_kj = _gpu_sparse_matmul(lhs, patches_scaled)
+            else:
+                results = []
+                for i in range(0, n_genes, batch_size):
+                    # For batching, we need slicing. 
+                    # If lhs is tensor, slicing sparse tensors in PyTorch can be tricky/limited.
+                    # Safe approach: pass the scipy batch and let _gpu_sparse_matmul convert it, 
+                    # OR slice the tensor if supported. 
+                    # PyTorch sparse slicing is not fully robust yet in all versions.
+                    # Fallback to scipy slicing + conversion for batches to be safe.
+                    
+                    if input_exp_mat_norm_gpu is not None:
+                         # Slicing sparse tensors is not directly supported in older torch versions.
+                         # We'll rely on the original matrix for slicing to be safe.
+                         batch = input_exp_mat_norm[i:i+batch_size]
+                         batch_result = _gpu_sparse_matmul(batch, patches_scaled)
+                    else:
+                         batch = input_exp_mat_norm[i:i+batch_size]
+                         batch_result = _gpu_sparse_matmul(batch, patches_scaled)
+                    
+                    results.append(batch_result)
+                x_kj = scipy.sparse.vstack(results, format='csr')
         else:
-            x_kj = input_exp_mat_norm @ (patches_cells @ diag_matrix_sparse)
+            x_kj = input_exp_mat_norm @ patches_scaled
 
         # Free up memory
-        del patches_cells, patches_cells_centroid, diag_matrix_sparse
+        del patches_cells, patches_scaled
 
         return _calculate_sparse_variances(x_kj, axis=1)
 
     def var_x_generator():
         for d_val in (d1, d2):
-            yield _var_local_means(input_sp_mat, d_val, input_exp_mat_norm, leaf_size, use_gpu).A.ravel()
+            yield _var_local_means(
+                ball_tree, input_sp_mat, d_val, input_exp_mat_norm, use_gpu, input_exp_mat_norm_gpu
+            ).A.ravel()
 
     var_x = np.column_stack(list(var_x_generator()))
+    
+    # Validation check: if gpu was used, we should clear the large tensor
+    if input_exp_mat_norm_gpu is not None:
+        del input_exp_mat_norm_gpu
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
     var_x_0_add = _calculate_sparse_variances(input_exp_mat_raw, axis=1).A.ravel()
     var_x_0_add /= max(var_x_0_add)
     t_matrix = (var_x[:, 1] / var_x[:, 0]) * var_x_0_add
@@ -249,17 +357,18 @@ def granp(
 
     t_matrix_sum = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size, use_gpu)
 
-    # Calculate p-values
-    t_matrix_sum_upper90 = np.quantile(t_matrix_sum, 0.90)
-    t_matrix_sum_mid = (val for val in t_matrix_sum if val < t_matrix_sum_upper90)
-    log_t_matrix_sum_mid = np.fromiter((np.log(val) for val in t_matrix_sum_mid), dtype=float)
+    # Calculate p-values - vectorized implementation
+    t_matrix_array = np.asarray(t_matrix_sum)
+    t_matrix_sum_upper90 = np.quantile(t_matrix_array, 0.90)
+
+    # Vectorized filtering and log computation
+    mask = t_matrix_array < t_matrix_sum_upper90
+    log_t_matrix_sum_mid = np.log(t_matrix_array[mask])
     log_norm_params = (log_t_matrix_sum_mid.mean(), log_t_matrix_sum_mid.std(ddof=1))
 
-    def p_value_generator():
-        for val in t_matrix_sum:
-            yield 1 - lognorm.cdf(val, scale=np.exp(log_norm_params[0]), s=log_norm_params[1])
-
-    p_values = list(p_value_generator())
+    # Vectorized p-value computation - single CDF call on entire array
+    p_values = 1 - lognorm.cdf(t_matrix_array, scale=np.exp(log_norm_params[0]), s=log_norm_params[1])
+    p_values = p_values.tolist()
 
     return pd.DataFrame({"gene_names": gene_names, "p_values": p_values})
 
@@ -328,61 +437,52 @@ def combine_p_values(
     # Get p-value columns
     pval_cols = [col for col in merged.columns if col.startswith('p_values_')]
     
-    # Calculate combined p-values for each gene
-    combined_results = []
-    for _, row in merged.iterrows():
-        gene_name = row['gene_names']
-        pvals = [row[col] for col in pval_cols]
-        
-        # Filter out NaN values
-        valid_pvals = [p for p in pvals if pd.notna(p)]
-        k = len(valid_pvals)
-        
-        if k == 0:
-            # No valid p-values for this gene
-            combined_results.append({
-                'gene_names': gene_name,
-                'number_samples': 0,
-                'calibrated_p_values': np.nan
-            })
-            continue
-        
-        # Apply combination method
+    # Vectorized p-value combination - avoid iterrows()
+    gene_names = merged['gene_names'].to_numpy()
+    pval_matrix = merged[pval_cols].to_numpy()
+
+    # Count non-NaN values per row (vectorized)
+    valid_counts = np.sum(~np.isnan(pval_matrix), axis=1)
+
+    # Initialize result arrays
+    n_genes = len(gene_names)
+    combined_pvals = np.full(n_genes, np.nan)
+
+    # Process genes with at least one valid p-value
+    valid_mask = valid_counts > 0
+
+    if valid_mask.any():
         if method == "fisher":
             # Fisher's method: -2 * sum(log(p_i))
-            # Avoid log(0) by using a small epsilon
             epsilon = 1e-300
-            valid_pvals_safe = [max(p, epsilon) for p in valid_pvals]
-            stat = -2 * sum(np.log(valid_pvals_safe))
+            pval_safe = np.maximum(pval_matrix, epsilon)
+            # Replace NaN with 1 (log(1)=0, won't affect sum)
+            pval_safe = np.where(np.isnan(pval_matrix), 1.0, pval_safe)
+            log_pvals = np.log(pval_safe)
+            stat = -2 * np.sum(log_pvals, axis=1)
             # Combined p-value from chi-squared distribution with 2k degrees of freedom
-            combined_pval = 1 - chi2.cdf(stat, 2 * k)
-            
+            combined_pvals[valid_mask] = 1 - chi2.cdf(
+                stat[valid_mask], 2 * valid_counts[valid_mask]
+            )
+
         elif method == "stouffer":
             # Stouffer's method: sum(Z_i) / sqrt(k)
-            # Convert p-values to z-scores
-            # Use two-tailed conversion: z = qnorm(1 - p/2) * sign(0.5 - p)
-            z_scores = []
-            for p in valid_pvals:
-                # Avoid extreme values
-                p_safe = max(min(p, 1 - 1e-15), 1e-15)
-                z = norm.ppf(1 - p_safe/2) * np.sign(0.5 - p_safe)
-                z_scores.append(z)
-            
-            # Combined z-score
-            z_combined = sum(z_scores) / np.sqrt(k)
+            # Clip p-values to avoid extreme z-scores
+            pval_clipped = np.clip(pval_matrix, 1e-15, 1 - 1e-15)
+            # Convert to z-scores (two-tailed)
+            z_scores = norm.ppf(1 - pval_clipped / 2) * np.sign(0.5 - pval_clipped)
+            # Replace NaN with 0 (won't affect sum)
+            z_scores = np.where(np.isnan(pval_matrix), 0, z_scores)
+            # Combined z-score per gene
+            z_combined = np.sum(z_scores, axis=1) / np.sqrt(np.maximum(valid_counts, 1))
             # Convert back to p-value (two-tailed)
-            combined_pval = 2 * (1 - norm.cdf(abs(z_combined)))
-        
-        combined_results.append({
-            'gene_names': gene_name,
-            'number_samples': k,
-            'calibrated_p_values': combined_pval
-        })
-    
-    # Create result DataFrame
-    result_df = pd.DataFrame(combined_results)
-    
-    # Ensure number_samples is integer type
-    result_df['number_samples'] = result_df['number_samples'].astype(int)
+            combined_pvals[valid_mask] = 2 * (1 - norm.cdf(np.abs(z_combined[valid_mask])))
+
+    # Create result DataFrame directly from arrays
+    result_df = pd.DataFrame({
+        'gene_names': gene_names,
+        'number_samples': valid_counts.astype(int),
+        'calibrated_p_values': combined_pvals
+    })
     
     return result_df
