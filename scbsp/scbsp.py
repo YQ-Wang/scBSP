@@ -11,8 +11,7 @@ from typing import List, Union, Optional
 
 import numpy as np
 import pandas as pd  # type: ignore
-import scipy  # type: ignore
-from scipy.sparse import csr_matrix, diags, identity, isspmatrix_csr  # type: ignore
+from scipy.sparse import csr_matrix, isspmatrix_csr  # type: ignore
 from scipy.stats import gmean, lognorm, chi2, norm  # type: ignore
 from sklearn.neighbors import BallTree  # type: ignore
 
@@ -45,27 +44,28 @@ def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
         return input_exp_mat
 
     data = input_exp_mat.data.copy()
-    rows, cols = input_exp_mat.nonzero()
 
-    row_indices = np.diff(input_exp_mat.indptr)
-    row_idx = np.r_[0, np.cumsum(row_indices)]
+    row_lengths = np.diff(input_exp_mat.indptr)
+    nnz_starts = input_exp_mat.indptr[:-1]
 
-    # Vectorized row max computation
-    non_empty_mask = row_indices > 0
+    non_empty_mask = row_lengths > 0
     row_max = np.ones(input_exp_mat.shape[0], dtype=data.dtype)
 
     if non_empty_mask.any():
-        non_empty_starts = row_idx[:-1][non_empty_mask]
-        row_max[non_empty_mask] = np.maximum.reduceat(data, non_empty_starts)
+        row_max[non_empty_mask] = np.maximum.reduceat(data, nnz_starts[non_empty_mask])
 
-    data_scaled = data / np.repeat(row_max, row_indices)
-    scaled_matrix = csr_matrix((data_scaled, (rows, cols)), shape=input_exp_mat.shape)
+    data_scaled = data / np.repeat(row_max, row_lengths)
+    scaled_matrix = csr_matrix(
+        (data_scaled, input_exp_mat.indices.copy(), input_exp_mat.indptr.copy()),
+        shape=input_exp_mat.shape,
+    )
 
     return scaled_matrix
 
 
 def _binary_distance_matrix_threshold(
-    input_sparse_mat_array: np.ndarray, d_val: float, leaf_size: int
+    input_sparse_mat_array: np.ndarray, d_val: float, leaf_size: int,
+    ball_tree: Optional[BallTree] = None
 ) -> csr_matrix:
     """
     Creates a binary distance matrix where distances below a threshold are marked as 1.
@@ -74,26 +74,29 @@ def _binary_distance_matrix_threshold(
         input_sparse_mat_array: The input sparse matrix array.
         d_val: The distance threshold.
         leaf_size: An integer for BallTree.
+        ball_tree: Pre-built BallTree to reuse. Built from input_sparse_mat_array if None.
 
     Returns:
         A csr_matrix representing the binary distance matrix.
     """
-    ball_tree = BallTree(input_sparse_mat_array, leaf_size=leaf_size)
+    if ball_tree is None:
+        ball_tree = BallTree(input_sparse_mat_array, leaf_size=leaf_size)
     indices = ball_tree.query_radius(
         input_sparse_mat_array, r=d_val, return_distance=False
     )
-    
+
     lengths = np.array([len(idx) for idx in indices])
     total_nnz = lengths.sum()
-    rows = np.repeat(np.arange(len(indices)), lengths)
-    cols = np.concatenate(indices) if total_nnz > 0 else np.array([], dtype=np.intp)
+    indptr = np.empty(len(indices) + 1, dtype=np.int64)
+    indptr[0] = 0
+    np.cumsum(lengths, out=indptr[1:])
+    col_indices = np.concatenate(indices) if total_nnz > 0 else np.array([], dtype=np.intp)
     data = np.ones(total_nnz, dtype=np.int8)
+    n = input_sparse_mat_array.shape[0]
 
-    return csr_matrix(
-        (data, (rows, cols)),
-        shape=(input_sparse_mat_array.shape[0], input_sparse_mat_array.shape[0]),
-        dtype=np.int8
-    )
+    mat = csr_matrix((data, col_indices, indptr), shape=(n, n), dtype=np.int8)
+    mat.sort_indices()
+    return mat
 
 
 def _calculate_sparse_variances(input_csr_mat: csr_matrix, axis: int) -> np.ndarray:
@@ -111,84 +114,112 @@ def _get_test_scores(
     d2: float,
     leaf_size: int,
     use_gpu: bool,
-) -> List[float]:
+) -> np.ndarray:
     """Calculates test scores for genomic data."""
-    input_exp_mat_norm = _scale_sparse_matrix(input_exp_mat_raw).transpose()
-    input_exp_mat_raw = input_exp_mat_raw.transpose()
+    input_exp_mat_norm = _scale_sparse_matrix(input_exp_mat_raw).T
+    input_exp_mat_raw = input_exp_mat_raw.T
+
+    ball_tree = BallTree(input_sp_mat, leaf_size=leaf_size)
 
     def _var_local_means(
         input_sp_mat: np.ndarray,
         d_val: float,
         input_exp_mat_norm: csr_matrix,
-        leaf_size: int,
+        ball_tree: BallTree,
         use_gpu: bool
-    ) -> np.matrix:
+    ) -> np.ndarray:
         patches_cells = _binary_distance_matrix_threshold(
-            input_sp_mat, d_val, leaf_size
+            input_sp_mat, d_val, leaf_size, ball_tree=ball_tree
         )
-        
-        # Scaling patches
-        sum_axis_0 = patches_cells.sum(axis=0).A.ravel().astype(np.float64)
-        inv_sum = np.reciprocal(sum_axis_0, where=sum_axis_0 != 0, out=np.zeros_like(sum_axis_0, dtype=np.float64))
-        patches_scaled = patches_cells.astype(np.float64).multiply(inv_sum)
 
         if use_gpu and gpu_enabled:
             import warnings
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore', category=UserWarning)
-                
+
                 try:
-                    # Memory-efficient GPU multiplication strategy: (Patches^T @ Exp^T)^T
-                    # This avoids O(Cells^2) dense matrix transfers by keeping patches sparse.
-                    exp_t_dense_gpu = torch.tensor(input_exp_mat_norm.toarray().T.astype(np.float32), device='cuda')
-                    
+                    col_counts = np.asarray(patches_cells.getnnz(axis=0), dtype=np.float32)
+                    inv_sum = np.reciprocal(col_counts, where=col_counts != 0, out=np.zeros_like(col_counts))
+
+                    patches_t_csr = patches_cells.T.tocsr()
+                    N_genes = input_exp_mat_norm.shape[0]
+                    M_cells = input_exp_mat_norm.shape[1]
+                    batch_size = max(1, 250_000_000 // M_cells)
+
                     patches_t_sparse_gpu = torch.sparse_csr_tensor(
-                        torch.tensor(patches_cells.T.indptr, dtype=torch.int64, device='cuda'),
-                        torch.tensor(patches_cells.T.indices, dtype=torch.int64, device='cuda'),
-                        torch.tensor(patches_cells.T.data.astype(np.float32), device='cuda'),
-                        size=patches_cells.T.shape
+                        torch.from_numpy(patches_t_csr.indptr.astype(np.int64)).to('cuda'),
+                        torch.from_numpy(patches_t_csr.indices.astype(np.int64)).to('cuda'),
+                        torch.from_numpy(patches_t_csr.data.astype(np.float32)).to('cuda'),
+                        size=patches_t_csr.shape
                     )
+                    del patches_t_csr
+
+                    inv_sum_gpu = torch.from_numpy(inv_sum).to('cuda').view(-1, 1)
                     
-                    # Sparse-Dense Multiplication on GPU
-                    res_t_gpu = torch.sparse.mm(patches_t_sparse_gpu, exp_t_dense_gpu)
-                    
-                    # Scale and calculate statistics
-                    inv_sum_gpu = torch.tensor(inv_sum.astype(np.float32), device='cuda').view(-1, 1)
-                    res_t_gpu *= inv_sum_gpu
-                    
-                    mean_x = res_t_gpu.mean(dim=0)
-                    mean_x2 = (res_t_gpu**2).mean(dim=0)
-                    var_gpu = mean_x2 - mean_x**2
-                    
-                    result_vars = var_gpu.cpu().numpy()
-                    
-                    del res_t_gpu, exp_t_dense_gpu, patches_t_sparse_gpu, inv_sum_gpu, var_gpu, mean_x, mean_x2
-                    
+                    result_vars_list = []
+                    for start_idx in range(0, N_genes, batch_size):
+                        end_idx = min(start_idx + batch_size, N_genes)
+                        
+                        exp_batch_np = input_exp_mat_norm[start_idx:end_idx, :].toarray().T.astype(np.float32)
+                        exp_batch_gpu = torch.from_numpy(exp_batch_np).to('cuda')
+                        
+                        res_batch_gpu = torch.sparse.mm(patches_t_sparse_gpu, exp_batch_gpu)
+                        del exp_batch_gpu
+                        
+                        res_batch_gpu *= inv_sum_gpu
+                        
+                        mean_x = res_batch_gpu.mean(dim=0)
+                        mean_x2 = res_batch_gpu.square_().mean(dim=0)
+                        del res_batch_gpu
+                        
+                        var_batch_gpu = mean_x2 - mean_x ** 2
+                        del mean_x, mean_x2
+                        
+                        result_vars_list.append(var_batch_gpu.cpu().numpy())
+                        del var_batch_gpu
+
+                    del inv_sum_gpu, patches_t_sparse_gpu
+                    torch.cuda.empty_cache()
+
+                    result_vars = np.concatenate(result_vars_list)
                     return result_vars.reshape(-1, 1)
-                    
+
                 except Exception as e:
                     print(f"GPU optimization failed, falling back to CPU: {e}")
-                    x_kj = input_exp_mat_norm @ patches_scaled
-        else:
-            x_kj = input_exp_mat_norm @ patches_scaled
 
-        return _calculate_sparse_variances(x_kj, axis=1)
+        col_counts = np.asarray(patches_cells.getnnz(axis=0), dtype=np.float64)
+        inv_sum = np.reciprocal(col_counts, where=col_counts != 0, out=np.zeros_like(col_counts))
+        patches_scaled = patches_cells.astype(np.float64).multiply(inv_sum)
+        
+        N_genes = input_exp_mat_norm.shape[0]
+        M_cells = input_exp_mat_norm.shape[1]
+        batch_size = max(1, 10_000_000 // M_cells)
+        
+        result_vars_list = []
+        for start_idx in range(0, N_genes, batch_size):
+            end_idx = min(start_idx + batch_size, N_genes)
+            exp_batch = input_exp_mat_norm[start_idx:end_idx, :]
+            
+            x_kj_batch = exp_batch @ patches_scaled
+            var_batch = _calculate_sparse_variances(x_kj_batch, axis=1)
+            result_vars_list.append(var_batch)
+
+        return np.concatenate(result_vars_list).reshape(-1, 1) if result_vars_list else np.array([]).reshape(-1, 1)
 
     def var_x_generator():
         for d_val in (d1, d2):
-            result = _var_local_means(input_sp_mat, d_val, input_exp_mat_norm, leaf_size, use_gpu)
+            result = _var_local_means(input_sp_mat, d_val, input_exp_mat_norm, ball_tree, use_gpu)
             yield result.ravel()
 
     var_x = np.column_stack(list(var_x_generator()))
     var_x_0_add = _calculate_sparse_variances(input_exp_mat_raw, axis=1).ravel()
     var_x_0_add /= max(var_x_0_add)
-    # Safe division to avoid RuntimeWarning when var_x[:, 0] contains zeros
     t_matrix = np.divide(
         var_x[:, 1], var_x[:, 0],
         out=np.zeros_like(var_x[:, 1]),
         where=var_x[:, 0] != 0
     ) * var_x_0_add
-    return t_matrix.tolist()
+    return t_matrix
 
 
 def granp(
@@ -222,16 +253,15 @@ def granp(
     d1 *= scale_factor
     d2 *= scale_factor
 
-    t_matrix_sum = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size, use_gpu)
+    t_matrix = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size, use_gpu)
 
-    t_matrix_array = np.asarray(t_matrix_sum)
-    t_matrix_sum_upper90 = np.quantile(t_matrix_array, 0.90)
-    mask = t_matrix_array < t_matrix_sum_upper90
-    log_t_matrix_sum_mid = np.log(t_matrix_array[mask])
-    log_norm_params = (log_t_matrix_sum_mid.mean(), log_t_matrix_sum_mid.std(ddof=1))
+    t_matrix_upper90 = np.quantile(t_matrix, 0.90)
+    mask = t_matrix < t_matrix_upper90
+    log_t_mid = np.log(t_matrix[mask])
+    log_norm_params = (log_t_mid.mean(), log_t_mid.std(ddof=1))
 
-    p_values = 1 - lognorm.cdf(t_matrix_array, scale=np.exp(log_norm_params[0]), s=log_norm_params[1])
-    return pd.DataFrame({"gene_names": gene_names, "p_values": p_values.tolist()})
+    p_values = 1 - lognorm.cdf(t_matrix, scale=np.exp(log_norm_params[0]), s=log_norm_params[1])
+    return pd.DataFrame({"gene_names": gene_names, "p_values": p_values})
 
 
 def combine_p_values(
@@ -252,15 +282,12 @@ def combine_p_values(
         if 'gene_names' not in df.columns or 'p_values' not in df.columns:
             raise ValueError(f"DataFrame {i} must have 'gene_names' and 'p_values' columns")
     
-    dfs_renamed = []
+    dfs_indexed = []
     for i, df in enumerate(list_of_pvalues):
-        df_copy = df.copy()
-        df_copy = df_copy.rename(columns={'p_values': f'p_values_{i+1}'})
-        dfs_renamed.append(df_copy)
+        df_indexed = df.set_index('gene_names').rename(columns={'p_values': f'p_values_{i+1}'})
+        dfs_indexed.append(df_indexed)
     
-    merged = dfs_renamed[0]
-    for df in dfs_renamed[1:]:
-        merged = pd.merge(merged, df, on='gene_names', how='outer')
+    merged = pd.concat(dfs_indexed, axis=1, join='outer').reset_index(names='gene_names')
     
     pval_cols = [col for col in merged.columns if col.startswith('p_values_')]
     gene_names = merged['gene_names'].to_numpy()
