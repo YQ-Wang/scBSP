@@ -17,17 +17,12 @@ from scbsp.scbsp import (
 
 class TestScaleSparseMinmax(unittest.TestCase):
     def test_scale_sparse_matrix(self):
-        # Creating a small sparse matrix with known values
         rows, cols = 3, 3
         data = [4, 2, 1, 4, 5]
         row_indices = [0, 0, 1, 1, 2]
         col_indices = [0, 2, 1, 2, 2]
         test_matrix = csr_matrix((data, (row_indices, col_indices)), shape=(rows, cols))
 
-        # Expected scaled matrix
-        # For row 0: max is 4, so 4/4=1 and 2/4=0.5
-        # For row 1: max is 4, so 1/4=0.25 and 4/4=1
-        # For row 2: only one value which is 5, so it remains 1
         expected_scaled_data = [1, 0.5, 0.25, 1, 1]
 
         scaled_matrix = _scale_sparse_matrix(test_matrix)
@@ -39,7 +34,6 @@ class TestScaleSparseMinmax(unittest.TestCase):
         )
 
     def test_sparse_matrix_scaling(self):
-        # Create a sparse matrix with less than 10% non-zero entries
         rows, cols = 10, 10
         density = 0.1
         sparse_matrix = sparse_random(
@@ -56,7 +50,6 @@ class TestScaleSparseMinmax(unittest.TestCase):
                 )
 
     def test_empty_matrix(self):
-        # Empty matrix
         matrix = csr_matrix((0, 0))
 
         scaled_matrix = _scale_sparse_matrix(matrix)
@@ -90,7 +83,6 @@ class TestBinaryDistanceMatrixThreshold(unittest.TestCase):
 
 class TestSpvars(unittest.TestCase):
     def test_non_empty_matrix(self):
-        # Create a non-empty sparse matrix
         data = np.array([1, 2, 3, 4])
         rows = np.array([0, 0, 1, 1])
         cols = np.array([0, 1, 0, 1])
@@ -135,10 +127,8 @@ class TestTestScores(unittest.TestCase):
 
         result = _get_test_scores(input_sp_mat, input_exp_mat_raw, d1, d2, leaf_size, use_gpu)
 
-        # Check if the result is a numpy.ndarray
-        self.assertIsInstance(result, list)
-        # Check the shape of the result
-        self.assertEqual(len(result), 2)  # Shape depends on your function's logic
+        self.assertIsInstance(result, np.ndarray)
+        self.assertEqual(len(result), 2)
 
 
 class TestGranp(unittest.TestCase):
