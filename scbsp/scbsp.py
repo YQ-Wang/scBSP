@@ -167,14 +167,13 @@ def _get_test_scores(
                         del exp_batch_gpu
                         
                         res_batch_gpu *= inv_sum_gpu
-                        
+
                         mean_x = res_batch_gpu.mean(dim=0)
-                        mean_x2 = res_batch_gpu.square_().mean(dim=0)
-                        del res_batch_gpu
-                        
-                        var_batch_gpu = mean_x2 - mean_x ** 2
-                        del mean_x, mean_x2
-                        
+                        res_batch_gpu -= mean_x
+                        res_batch_gpu.square_()
+                        var_batch_gpu = res_batch_gpu.mean(dim=0)
+                        del res_batch_gpu, mean_x
+
                         result_vars_list.append(var_batch_gpu.cpu().numpy())
                         del var_batch_gpu
 
@@ -189,19 +188,24 @@ def _get_test_scores(
 
         col_counts = np.asarray(patches_cells.getnnz(axis=0), dtype=np.float64)
         inv_sum = np.reciprocal(col_counts, where=col_counts != 0, out=np.zeros_like(col_counts))
-        patches_scaled = patches_cells.astype(np.float64).multiply(inv_sum)
-        
+        # The neighbor matrix is sparse, but the expression matrix is typically
+        # dense (most genes are expressed in most cells). Computing the local
+        # means as dense(exp_batch) @ sparse(patches) dispatches to a fast
+        # single-pass kernel and a BLAS-backed variance, avoiding the costly
+        # sparse-times-sparse output-pattern computation.
+        patches_scaled = patches_cells.multiply(inv_sum).tocsr()
+
         N_genes = input_exp_mat_norm.shape[0]
         M_cells = input_exp_mat_norm.shape[1]
         batch_size = max(1, 10_000_000 // M_cells)
-        
+
         result_vars_list = []
         for start_idx in range(0, N_genes, batch_size):
             end_idx = min(start_idx + batch_size, N_genes)
-            exp_batch = input_exp_mat_norm[start_idx:end_idx, :]
-            
-            x_kj_batch = exp_batch @ patches_scaled
-            var_batch = _calculate_sparse_variances(x_kj_batch, axis=1)
+            exp_batch = input_exp_mat_norm[start_idx:end_idx, :].toarray()
+
+            x_kj_batch = np.asarray(exp_batch @ patches_scaled)
+            var_batch = x_kj_batch.var(axis=1)
             result_vars_list.append(var_batch)
 
         return np.concatenate(result_vars_list).reshape(-1, 1) if result_vars_list else np.array([]).reshape(-1, 1)
