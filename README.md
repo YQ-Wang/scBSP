@@ -54,13 +54,15 @@ Additional parameters to specify include:
 
 ### Performance
 
-For large-scale spatial transcriptomics data with 10,000 genes, `scBSP` with GPU acceleration provides significant speedups.
+`scBSP` is built for large-scale spatial transcriptomics data. Version 0.4.1 roughly halves CPU runtime relative to 0.4.0 (~2x faster) with no change to the statistical results, and on a CUDA GPU it runs faster still. The table below reports runtime on the bundled benchmark dataset (10,000 genes), replicated to larger cell counts, measured with scBSP v0.4.1 on an NVIDIA RTX 5070 Ti:
 
 | Cells | Genes | CPU Time | GPU Time (RTX 5070 Ti) | Speedup |
 |-------|-------|----------|------------------------|---------|
-| 2,308 | 10,000 | 2.27s | 0.81s | ~2.8x |
-| 4,616 | 10,000 | 4.75s | 1.60s | ~3.0x |
-| 9,232 | 10,000 | 10.49s | 3.27s | ~3.2x |
+| 2,308 | 10,000 | 1.32s | 0.77s | ~1.7x |
+| 4,616 | 10,000 | 2.67s | 1.49s | ~1.8x |
+| 9,232 | 10,000 | 6.00s | 2.90s | ~2.1x |
+
+CPU and GPU produce numerically equivalent p-values (Pearson correlation 1.000000).
 
 
 ### Example
