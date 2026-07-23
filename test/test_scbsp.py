@@ -111,6 +111,52 @@ class TestSpvars(unittest.TestCase):
 
 
 class TestTestScores(unittest.TestCase):
+    @staticmethod
+    def _reference_test_scores(
+        input_sp_mat,
+        input_exp_mat_raw,
+        d1,
+        d2,
+        leaf_size,
+    ):
+        """Calculate scores using the original radius-by-radius loop order."""
+        input_exp_mat_norm = _scale_sparse_matrix(input_exp_mat_raw).T
+        radius_variances = []
+
+        for d_val in (d1, d2):
+            patches_cells = _binary_distance_matrix_threshold(
+                input_sp_mat,
+                d_val,
+                leaf_size,
+            )
+            col_counts = np.asarray(
+                patches_cells.getnnz(axis=0),
+                dtype=np.float64,
+            )
+            inv_sum = np.reciprocal(
+                col_counts,
+                where=col_counts != 0,
+                out=np.zeros_like(col_counts),
+            )
+            patches_scaled = patches_cells.multiply(inv_sum).tocsr()
+            local_means = np.asarray(
+                input_exp_mat_norm.toarray() @ patches_scaled
+            )
+            radius_variances.append(local_means.var(axis=1))
+
+        var_x = np.column_stack(radius_variances)
+        raw_variance = _calculate_sparse_variances(
+            input_exp_mat_raw.T,
+            axis=1,
+        ).ravel()
+        raw_variance /= max(raw_variance)
+        return np.divide(
+            var_x[:, 1],
+            var_x[:, 0],
+            out=np.zeros_like(var_x[:, 1]),
+            where=var_x[:, 0] != 0,
+        ) * raw_variance
+
     def test_non_empty_matrices(self):
         # Create non-empty numpy array and csr_matrix
         input_sp_mat = np.array([[0, 1], [1, 0], [1, 1]])
@@ -129,6 +175,32 @@ class TestTestScores(unittest.TestCase):
 
         self.assertIsInstance(result, np.ndarray)
         self.assertEqual(len(result), 2)
+
+    def test_optimized_cpu_matches_radius_by_radius_reference(self):
+        rng = np.random.default_rng(73021)
+        input_sp_mat = rng.uniform(0, 10, size=(48, 3))
+        input_exp_dense = rng.poisson(2, size=(48, 23)).astype(np.float64)
+        input_exp_dense[rng.random(input_exp_dense.shape) < 0.65] = 0
+        input_exp_mat_raw = csr_matrix(input_exp_dense)
+        d1, d2, leaf_size = 1.5, 4.0, 17
+
+        expected = self._reference_test_scores(
+            input_sp_mat,
+            input_exp_mat_raw,
+            d1,
+            d2,
+            leaf_size,
+        )
+        actual = _get_test_scores(
+            input_sp_mat,
+            input_exp_mat_raw,
+            d1,
+            d2,
+            leaf_size,
+            use_gpu=False,
+        )
+
+        np.testing.assert_array_equal(actual, expected)
 
 
 class TestGranp(unittest.TestCase):

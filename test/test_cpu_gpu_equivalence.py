@@ -4,6 +4,7 @@ Test to verify CPU and GPU results are equivalent and benchmark larger datasets.
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy.sparse import random as sparse_random
 import sys
 import os
@@ -22,7 +23,14 @@ def generate_test_data(n_cells: int, n_genes: int, sparsity: float = 0.8, seed: 
     spatial_coords = np.random.uniform(0, 100, size=(n_cells, 3))
     
     density = 1 - sparsity
-    exp_sparse = sparse_random(n_cells, n_genes, density=density, format='csr', dtype=np.float32)
+    exp_sparse = sparse_random(
+        n_cells,
+        n_genes,
+        density=density,
+        format='csr',
+        dtype=np.float32,
+        random_state=seed,
+    )
     exp_sparse.data = exp_sparse.data * 1000
     
     gene_names = [f"Gene_{i}" for i in range(n_genes)]
@@ -40,8 +48,7 @@ def test_cpu_gpu_equivalence():
     print(f"GPU Enabled: {gpu_enabled}")
     
     if not gpu_enabled:
-        print("\nGPU not available, skipping GPU tests.")
-        return True
+        pytest.skip("GPU not available")
     
     test_configs = [
         (500, 200),
@@ -50,69 +57,54 @@ def test_cpu_gpu_equivalence():
         (5000, 500),
     ]
     
-    all_passed = True
-    
     for n_cells, n_genes in test_configs:
         print(f"\nTesting {n_cells} cells x {n_genes} genes...")
         
         spatial_coords, exp_df = generate_test_data(n_cells, n_genes)
         
-        # Run CPU
-        try:
-            result_cpu = granp(spatial_coords, exp_df, use_gpu=False)
-        except Exception as e:
-            print(f"  CPU ERROR: {e}")
-            all_passed = False
-            continue
-        
-        # Run GPU
-        try:
-            result_gpu = granp(spatial_coords, exp_df, use_gpu=True)
-        except Exception as e:
-            print(f"  GPU ERROR: {e}")
-            all_passed = False
-            continue
+        result_cpu = granp(spatial_coords, exp_df, use_gpu=False)
+        result_gpu = granp(spatial_coords, exp_df, use_gpu=True)
         
         cpu_pvals = result_cpu['p_values'].values
         gpu_pvals = result_gpu['p_values'].values
         
-        # Check if gene names match
-        if not np.array_equal(result_cpu['gene_names'].values, result_gpu['gene_names'].values):
-            print(f"  FAIL: Gene names don't match")
-            all_passed = False
-            continue
+        np.testing.assert_array_equal(
+            result_cpu['gene_names'].values,
+            result_gpu['gene_names'].values,
+        )
         
         max_diff = np.max(np.abs(cpu_pvals - gpu_pvals))
         mean_diff = np.mean(np.abs(cpu_pvals - gpu_pvals))
         correlation = np.corrcoef(cpu_pvals, gpu_pvals)[0, 1]
         
         tolerance = 1e-5
-        
-        if max_diff < tolerance or correlation > 0.9999:
-            print(f"  PASS: Max diff = {max_diff:.2e}, Mean diff = {mean_diff:.2e}, Correlation = {correlation:.6f}")
-        else:
-            print(f"  FAIL: Max diff = {max_diff:.2e}, Mean diff = {mean_diff:.2e}, Correlation = {correlation:.6f}")
-            all_passed = False
+        np.testing.assert_allclose(
+            gpu_pvals,
+            cpu_pvals,
+            rtol=tolerance,
+            atol=tolerance,
+        )
+        assert correlation > 0.9999
+        print(
+            f"  PASS: Max diff = {max_diff:.2e}, "
+            f"Mean diff = {mean_diff:.2e}, "
+            f"Correlation = {correlation:.6f}"
+        )
     
     print("\n" + "=" * 70)
-    if all_passed:
-        print("All CPU/GPU equivalence tests PASSED!")
-    else:
-        print("Some tests FAILED!")
+    print("All CPU/GPU equivalence tests PASSED!")
     print("=" * 70)
-    
-    return all_passed
 
 
-def test_large_dataset_optimization():
-    """Test and optimize for larger datasets."""
+def benchmark_large_dataset_optimization():
+    """Benchmark larger datasets."""
     print("\n" + "=" * 70)
     print("Testing Large Dataset Handling")
     print("=" * 70)
     
     if not gpu_enabled:
         print("\nGPU not available, skipping large dataset tests.")
-        return True
+        return []
     
     import time
     
@@ -166,8 +158,9 @@ def test_large_dataset_optimization():
 
     # Run large dataset test
 if __name__ == "__main__":
-    equiv_passed = test_cpu_gpu_equivalence()
-    large_results = test_large_dataset_optimization()
+    test_cpu_gpu_equivalence()
+    equiv_passed = True
+    large_results = benchmark_large_dataset_optimization()
     
     print("\n" + "=" * 70)
     print("Summary")

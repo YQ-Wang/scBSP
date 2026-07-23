@@ -16,7 +16,7 @@ from scipy.stats import gmean, lognorm, chi2, norm  # type: ignore
 from sklearn.neighbors import BallTree  # type: ignore
 
 gpu_enabled = True
-gpu_backend = "torch_sparse"
+gpu_backend: Optional[str] = "torch_sparse"
 
 try:
     import torch  # type: ignore
@@ -43,23 +43,30 @@ def _scale_sparse_matrix(input_exp_mat: csr_matrix) -> csr_matrix:
     if input_exp_mat.shape[0] == 0 or input_exp_mat.shape[1] == 0:
         return input_exp_mat
 
-    data = input_exp_mat.data.copy()
+    output_dtype = (
+        input_exp_mat.data.dtype
+        if np.issubdtype(input_exp_mat.data.dtype, np.inexact)
+        else np.dtype(np.float64)
+    )
+    scaled_matrix = input_exp_mat.astype(output_dtype, copy=True)
 
-    row_lengths = np.diff(input_exp_mat.indptr)
-    nnz_starts = input_exp_mat.indptr[:-1]
+    row_lengths = np.diff(scaled_matrix.indptr)
+    nnz_starts = scaled_matrix.indptr[:-1]
 
     non_empty_mask = row_lengths > 0
-    row_max = np.ones(input_exp_mat.shape[0], dtype=data.dtype)
+    row_max = np.ones(scaled_matrix.shape[0], dtype=scaled_matrix.data.dtype)
 
     if non_empty_mask.any():
-        row_max[non_empty_mask] = np.maximum.reduceat(data, nnz_starts[non_empty_mask])
+        row_max[non_empty_mask] = np.maximum.reduceat(
+            scaled_matrix.data, nnz_starts[non_empty_mask]
+        )
 
-    data_scaled = data / np.repeat(row_max, row_lengths)
-    scaled_matrix = csr_matrix(
-        (data_scaled, input_exp_mat.indices.copy(), input_exp_mat.indptr.copy()),
-        shape=input_exp_mat.shape,
+    row_divisors = np.repeat(row_max, row_lengths)
+    np.divide(
+        scaled_matrix.data,
+        row_divisors,
+        out=scaled_matrix.data,
     )
-
     return scaled_matrix
 
 
@@ -120,102 +127,180 @@ def _get_test_scores(
     input_exp_mat_raw = input_exp_mat_raw.T
 
     ball_tree = BallTree(input_sp_mat, leaf_size=leaf_size)
-
-    def _var_local_means(
-        input_sp_mat: np.ndarray,
-        d_val: float,
-        input_exp_mat_norm: csr_matrix,
-        ball_tree: BallTree,
-        use_gpu: bool
-    ) -> np.ndarray:
-        patches_cells = _binary_distance_matrix_threshold(
+    patches_by_radius = [
+        _binary_distance_matrix_threshold(
             input_sp_mat, d_val, leaf_size, ball_tree=ball_tree
         )
+        for d_val in (d1, d2)
+    ]
 
-        if use_gpu and gpu_enabled:
-            import warnings
-            with warnings.catch_warnings():
-                warnings.filterwarnings('ignore', category=UserWarning)
+    def _cpu_local_variances() -> List[np.ndarray]:
+        # The neighbor matrices are sparse, but local means are generally dense.
+        # Keep both scaled matrices so each dense expression batch can be reused
+        # for both radii instead of being materialized twice.
+        patches_scaled = []
+        for patches_cells in patches_by_radius:
+            col_counts = np.asarray(
+                patches_cells.getnnz(axis=0), dtype=np.float64
+            )
+            inv_sum = np.reciprocal(
+                col_counts,
+                where=col_counts != 0,
+                out=np.zeros_like(col_counts),
+            )
+            patches_scaled.append(patches_cells.multiply(inv_sum).tocsr())
 
-                try:
-                    col_counts = np.asarray(patches_cells.getnnz(axis=0), dtype=np.float32)
-                    inv_sum = np.reciprocal(col_counts, where=col_counts != 0, out=np.zeros_like(col_counts))
+        n_genes, n_cells = input_exp_mat_norm.shape
+        batch_size = max(1, 10_000_000 // n_cells)
+        result_vars: List[List[np.ndarray]] = [
+            [] for _ in patches_scaled
+        ]
 
-                    patches_t_csr = patches_cells.T.tocsr()
-                    N_genes = input_exp_mat_norm.shape[0]
-                    M_cells = input_exp_mat_norm.shape[1]
-                    batch_size = max(1, 250_000_000 // M_cells)
-
-                    patches_t_sparse_gpu = torch.sparse_csr_tensor(
-                        torch.from_numpy(patches_t_csr.indptr.astype(np.int64)).to('cuda'),
-                        torch.from_numpy(patches_t_csr.indices.astype(np.int64)).to('cuda'),
-                        torch.from_numpy(patches_t_csr.data.astype(np.float32)).to('cuda'),
-                        size=patches_t_csr.shape
-                    )
-                    del patches_t_csr
-
-                    inv_sum_gpu = torch.from_numpy(inv_sum).to('cuda').view(-1, 1)
-                    
-                    result_vars_list = []
-                    for start_idx in range(0, N_genes, batch_size):
-                        end_idx = min(start_idx + batch_size, N_genes)
-                        
-                        exp_batch_np = input_exp_mat_norm[start_idx:end_idx, :].toarray().T.astype(np.float32)
-                        exp_batch_gpu = torch.from_numpy(exp_batch_np).to('cuda')
-                        
-                        res_batch_gpu = torch.sparse.mm(patches_t_sparse_gpu, exp_batch_gpu)
-                        del exp_batch_gpu
-                        
-                        res_batch_gpu *= inv_sum_gpu
-
-                        mean_x = res_batch_gpu.mean(dim=0)
-                        res_batch_gpu -= mean_x
-                        res_batch_gpu.square_()
-                        var_batch_gpu = res_batch_gpu.mean(dim=0)
-                        del res_batch_gpu, mean_x
-
-                        result_vars_list.append(var_batch_gpu.cpu().numpy())
-                        del var_batch_gpu
-
-                    del inv_sum_gpu, patches_t_sparse_gpu
-                    torch.cuda.empty_cache()
-
-                    result_vars = np.concatenate(result_vars_list)
-                    return result_vars.reshape(-1, 1)
-
-                except Exception as e:
-                    print(f"GPU optimization failed, falling back to CPU: {e}")
-
-        col_counts = np.asarray(patches_cells.getnnz(axis=0), dtype=np.float64)
-        inv_sum = np.reciprocal(col_counts, where=col_counts != 0, out=np.zeros_like(col_counts))
-        # The neighbor matrix is sparse, but the expression matrix is typically
-        # dense (most genes are expressed in most cells). Computing the local
-        # means as dense(exp_batch) @ sparse(patches) dispatches to a fast
-        # single-pass kernel and a BLAS-backed variance, avoiding the costly
-        # sparse-times-sparse output-pattern computation.
-        patches_scaled = patches_cells.multiply(inv_sum).tocsr()
-
-        N_genes = input_exp_mat_norm.shape[0]
-        M_cells = input_exp_mat_norm.shape[1]
-        batch_size = max(1, 10_000_000 // M_cells)
-
-        result_vars_list = []
-        for start_idx in range(0, N_genes, batch_size):
-            end_idx = min(start_idx + batch_size, N_genes)
+        for start_idx in range(0, n_genes, batch_size):
+            end_idx = min(start_idx + batch_size, n_genes)
             exp_batch = input_exp_mat_norm[start_idx:end_idx, :].toarray()
 
-            x_kj_batch = np.asarray(exp_batch @ patches_scaled)
-            var_batch = x_kj_batch.var(axis=1)
-            result_vars_list.append(var_batch)
+            for radius_idx, patches_matrix in enumerate(patches_scaled):
+                x_kj_batch = np.asarray(exp_batch @ patches_matrix)
+                result_vars[radius_idx].append(x_kj_batch.var(axis=1))
 
-        return np.concatenate(result_vars_list).reshape(-1, 1) if result_vars_list else np.array([]).reshape(-1, 1)
+        return [
+            np.concatenate(radius_vars) if radius_vars else np.array([])
+            for radius_vars in result_vars
+        ]
 
-    def var_x_generator():
-        for d_val in (d1, d2):
-            result = _var_local_means(input_sp_mat, d_val, input_exp_mat_norm, ball_tree, use_gpu)
-            yield result.ravel()
+    def _gpu_batch_size(n_genes: int, n_cells: int) -> int:
+        # A sparse.mm batch temporarily holds both its float32 input and output.
+        # Retain the previous 250M-element ceiling, but reduce it when current
+        # free VRAM cannot safely support those two dense tensors.
+        max_dense_elements = 250_000_000
+        try:
+            free_bytes, _ = torch.cuda.mem_get_info()
+            reserve_bytes = 256 * 1024**2
+            usable_bytes = max(0, free_bytes - reserve_bytes)
+            dense_bytes = int(usable_bytes * 0.60)
+            bytes_per_element = 2 * np.dtype(np.float32).itemsize
+            memory_limited_elements = max(1, dense_bytes // bytes_per_element)
+            max_dense_elements = min(
+                max_dense_elements, memory_limited_elements
+            )
+        except (AttributeError, RuntimeError):
+            # Older torch versions may not expose mem_get_info. The established
+            # element ceiling remains a safe fallback for supported GPUs.
+            pass
 
-    var_x = np.column_stack(list(var_x_generator()))
+        return max(1, min(n_genes, max_dense_elements // n_cells))
+
+    def _gpu_local_variances() -> List[np.ndarray]:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+
+            patches_gpu = []
+            inverse_counts_gpu = []
+            for patches_cells in patches_by_radius:
+                col_counts = np.asarray(
+                    patches_cells.getnnz(axis=0), dtype=np.float32
+                )
+                inv_sum = np.reciprocal(
+                    col_counts,
+                    where=col_counts != 0,
+                    out=np.zeros_like(col_counts),
+                )
+                patches_t_csr = patches_cells.T.tocsr()
+                patches_gpu.append(
+                    torch.sparse_csr_tensor(
+                        torch.from_numpy(
+                            patches_t_csr.indptr.astype(np.int64)
+                        ).to("cuda"),
+                        torch.from_numpy(
+                            patches_t_csr.indices.astype(np.int64)
+                        ).to("cuda"),
+                        torch.from_numpy(
+                            patches_t_csr.data.astype(np.float32)
+                        ).to("cuda"),
+                        size=patches_t_csr.shape,
+                    )
+                )
+                inverse_counts_gpu.append(
+                    torch.from_numpy(inv_sum).to("cuda").view(-1, 1)
+                )
+
+            n_genes, n_cells = input_exp_mat_norm.shape
+            batch_size = _gpu_batch_size(n_genes, n_cells)
+            result_vars: List[List[np.ndarray]] = [
+                [] for _ in patches_gpu
+            ]
+
+            def _process_batch(
+                start_idx: int, end_idx: int
+            ) -> List[np.ndarray]:
+                exp_batch_np = (
+                    input_exp_mat_norm[start_idx:end_idx, :]
+                    .toarray()
+                    .T.astype(np.float32)
+                )
+                exp_batch_gpu = torch.from_numpy(exp_batch_np).to("cuda")
+                batch_results = []
+
+                for patches_matrix, inv_sum_gpu in zip(
+                    patches_gpu, inverse_counts_gpu
+                ):
+                    res_batch_gpu = torch.sparse.mm(
+                        patches_matrix, exp_batch_gpu
+                    )
+                    res_batch_gpu *= inv_sum_gpu
+
+                    # Preserve the existing population-variance calculation.
+                    mean_x = res_batch_gpu.mean(dim=0)
+                    res_batch_gpu -= mean_x
+                    res_batch_gpu.square_()
+                    var_batch_gpu = res_batch_gpu.mean(dim=0)
+                    batch_results.append(var_batch_gpu.cpu().numpy())
+                    del res_batch_gpu, mean_x, var_batch_gpu
+
+                return batch_results
+
+            start_idx = 0
+            while start_idx < n_genes:
+                end_idx = min(start_idx + batch_size, n_genes)
+                try:
+                    batch_results = _process_batch(start_idx, end_idx)
+                except RuntimeError as exc:
+                    oom_type = getattr(
+                        torch.cuda, "OutOfMemoryError", ()
+                    )
+                    is_cuda_oom = (
+                        isinstance(oom_type, type)
+                        and isinstance(exc, oom_type)
+                    ) or "out of memory" in str(exc).lower()
+                    if not is_cuda_oom or end_idx - start_idx == 1:
+                        raise
+
+                    batch_size = max(1, (end_idx - start_idx) // 2)
+                    torch.cuda.empty_cache()
+                    continue
+
+                for radius_idx, radius_result in enumerate(batch_results):
+                    result_vars[radius_idx].append(radius_result)
+                start_idx = end_idx
+
+            return [
+                np.concatenate(radius_vars) if radius_vars else np.array([])
+                for radius_vars in result_vars
+            ]
+
+    if use_gpu and gpu_enabled:
+        try:
+            local_variances = _gpu_local_variances()
+        except Exception as exc:
+            print(f"GPU optimization failed, falling back to CPU: {exc}")
+            local_variances = _cpu_local_variances()
+    else:
+        local_variances = _cpu_local_variances()
+
+    var_x = np.column_stack(local_variances)
     var_x_0_add = _calculate_sparse_variances(input_exp_mat_raw, axis=1).ravel()
     var_x_0_add /= max(var_x_0_add)
     t_matrix = np.divide(

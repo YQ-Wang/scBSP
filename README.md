@@ -54,15 +54,17 @@ Additional parameters to specify include:
 
 ### Performance
 
-`scBSP` is built for large-scale spatial transcriptomics data. Version 0.4.1 roughly halves CPU runtime relative to 0.4.0 (~2x faster) with no change to the statistical results, and on a CUDA GPU it runs faster still. The table below reports runtime on the bundled benchmark dataset (10,000 genes), replicated to larger cell counts, measured with scBSP v0.4.1 on an NVIDIA RTX 5070 Ti:
+`scBSP` is built for large-scale spatial transcriptomics data. Version 0.4.2 reuses each expression batch across both distance scales, sizes GPU batches from available VRAM, and retries smaller batches after a CUDA out-of-memory error. The statistical method is unchanged: CPU scores and p-values are bit-for-bit identical to version 0.4.1, while GPU results remain numerically equivalent.
+
+The table below reports median runtime from three measured runs after one warm-up. It uses the bundled 10,000-gene benchmark dataset, with rows replicated to larger cell counts, and was measured with scBSP v0.4.2, Python 3.13.9, PyTorch 2.10.0, and an NVIDIA RTX 5070 Ti:
 
 | Cells | Genes | CPU Time | GPU Time (RTX 5070 Ti) | Speedup |
 |-------|-------|----------|------------------------|---------|
-| 2,308 | 10,000 | 1.32s | 0.77s | ~1.7x |
-| 4,616 | 10,000 | 2.67s | 1.49s | ~1.8x |
-| 9,232 | 10,000 | 6.00s | 2.90s | ~2.1x |
+| 2,308 | 10,000 | 1.17s | 0.70s | ~1.7x |
+| 4,616 | 10,000 | 2.50s | 1.70s | ~1.5x |
+| 9,232 | 10,000 | 5.79s | 2.89s | ~2.0x |
 
-CPU and GPU produce numerically equivalent p-values (Pearson correlation 1.000000).
+CPU and GPU produce numerically equivalent p-values (Pearson correlation 1.000000; maximum observed pre/post GPU p-value difference `6.92e-7`).
 
 
 ### Example
